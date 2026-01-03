@@ -114,49 +114,79 @@ def brute_force_with_pruning(instance, timeout=200.0):
 
                     stats['branches_explored'] += 1
 
-                    # Time / capital pruning
-                    if capital < 0 or total_time > T_max:
+                    # Determine current port and next port
+                    # When idx=0, we're at Amsterdam (tour[0]), need to travel to tour[1]
+                    # When idx=1, we're at tour[1], need to travel to tour[2]
+                    # When idx=num_decisions, we're at tour[num_decisions], need to return to Amsterdam
+                    current_port = tour[idx]
+                    
+                    # Leaf: all decisions made, need to return to Amsterdam
+                    if idx == num_decisions:
+                        # Travel back to Amsterdam
+                        travel_cost = costs[current_port][0]
+                        travel_time = travel_times[current_port][0]
+                        capital_after_travel = capital - travel_cost
+                        total_time_after_travel = total_time + travel_time
+                        
+                        # Pruning check after travel
+                        if capital_after_travel < 0 or total_time_after_travel > T_max:
+                            stats['branches_pruned'] += 1
+                            return
+                        
+                        stats['complete_solutions_evaluated'] += 1
+
+                        if is_valid_tour(tour, capital_after_travel, initial_capital, total_time_after_travel):
+                            if capital_after_travel > best_capital:
+                                best_capital = capital_after_travel
+                                best_tour = tour.copy()
+                                best_decisions = decisions.copy()
+                                best_time = total_time_after_travel
+                        return
+
+                    # Travel to next port
+                    next_port = tour[idx + 1]
+                    travel_cost = costs[current_port][next_port]
+                    travel_time = travel_times[current_port][next_port]
+                    
+                    # Apply travel cost and time
+                    capital_after_travel = capital - travel_cost
+                    total_time_after_travel = total_time + travel_time
+                    
+                    # Early termination: check feasibility after travel
+                    if capital_after_travel < 0:
                         stats['branches_pruned'] += 1
+                        stats['pruned_by_capital'] += 1
+                        return
+                    if total_time_after_travel > T_max:
+                        stats['branches_pruned'] += 1
+                        stats['pruned_by_time'] += 1
                         return
 
                     # Upper-bound profit pruning (BRANCH AND BOUND)
                     remaining = num_decisions - idx
                     optimistic_profit = remaining * B * max_unit_profit
-                    if capital + optimistic_profit <= best_capital:
+                    if capital_after_travel + optimistic_profit <= best_capital:
                         stats['branches_pruned'] += 1
                         stats['pruned_by_bound'] += 1
                         return
 
-                    # Leaf: all decisions made
-                    if idx == num_decisions:
-                        stats['complete_solutions_evaluated'] += 1
-
-                        if is_valid_tour(tour, capital, initial_capital, total_time):
-                            if capital > best_capital:
-                                best_capital = capital
-                                best_tour = tour.copy()
-                                best_decisions = decisions.copy()
-                                best_time = total_time
-                        return
-
-                    next_port = tour[idx + 1]
-
+                    # Now we're at next_port, make decision
                     # Decision 0: do nothing
                     dfs_decisions(
                         idx + 1,
-                        capital,
+                        capital_after_travel,
                         load,
-                        total_time + 1,
+                        total_time_after_travel + 1,  # operation time
                         decisions + [0]
                     )
 
                     # Decision 1: BUY
-                    if load < B and capital >= purchase_prices[next_port]:
+                    if load < B and capital_after_travel >= purchase_prices[next_port]:
                         dfs_decisions(
                             idx + 1,
-                            capital - purchase_prices[next_port],
+                            capital_after_travel - purchase_prices[next_port],
                             load + 1,
-                            total_time + 1,
+                            total_time_after_travel + 1,  # operation time
                             decisions + [1]
                         )
 
@@ -164,9 +194,9 @@ def brute_force_with_pruning(instance, timeout=200.0):
                     if load > 0:
                         dfs_decisions(
                             idx + 1,
-                            capital + sale_prices[next_port],
+                            capital_after_travel + sale_prices[next_port],
                             load - 1,
-                            total_time + 1,
+                            total_time_after_travel + 1,  # operation time
                             decisions + [2]
                         )
 
