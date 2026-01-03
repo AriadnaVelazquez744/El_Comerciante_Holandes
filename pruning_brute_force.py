@@ -128,9 +128,16 @@ def brute_force_with_pruning(instance, timeout=200.0):
                         capital_after_travel = capital - travel_cost
                         total_time_after_travel = total_time + travel_time
                         
-                        # Pruning check after travel
-                        if capital_after_travel < 0 or total_time_after_travel > T_max:
+                        # Pruning check after travel (early termination at leaf)
+                        if capital_after_travel < 0:
                             stats['branches_pruned'] += 1
+                            stats['pruned_by_capital'] += 1
+                            stats['pruned_by_early_termination'] += 1
+                            return
+                        if total_time_after_travel > T_max:
+                            stats['branches_pruned'] += 1
+                            stats['pruned_by_time'] += 1
+                            stats['pruned_by_early_termination'] += 1
                             return
                         
                         stats['complete_solutions_evaluated'] += 1
@@ -181,7 +188,16 @@ def brute_force_with_pruning(instance, timeout=200.0):
                     )
 
                     # Decision 1: BUY
-                    if load < B and capital_after_travel >= purchase_prices[next_port]:
+                    if load >= B:
+                        # Capacity constraint: cannot buy more
+                        stats['branches_pruned'] += 1
+                        stats['pruned_by_capacity'] += 1
+                    elif capital_after_travel < purchase_prices[next_port]:
+                        # Capital constraint: cannot afford purchase
+                        stats['branches_pruned'] += 1
+                        stats['pruned_by_capital'] += 1
+                    else:
+                        # Can buy - explore this branch
                         dfs_decisions(
                             idx + 1,
                             capital_after_travel - purchase_prices[next_port],
@@ -191,7 +207,12 @@ def brute_force_with_pruning(instance, timeout=200.0):
                         )
 
                     # Decision 2: SELL
-                    if load > 0:
+                    if load <= 0:
+                        # Capacity constraint: nothing to sell
+                        stats['branches_pruned'] += 1
+                        stats['pruned_by_capacity'] += 1
+                    else:
+                        # Can sell - explore this branch
                         dfs_decisions(
                             idx + 1,
                             capital_after_travel + sale_prices[next_port],
