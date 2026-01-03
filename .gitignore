@@ -208,3 +208,13 @@ __marimo__/
 
 #local files
 cspell.json
+
+#Latex files
+*.aux
+*.log
+*.out
+*.fls
+*.fdb_latexmk
+*.blg
+*.bbl
+*.synctex.gz
