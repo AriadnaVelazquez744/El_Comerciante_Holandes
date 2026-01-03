@@ -1,0 +1,281 @@
+{
+  "growth_analysis": {
+    "n": [
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12
+    ],
+    "pure_bf_time": [
+      0.00031685829162597656,
+      0.0003960132598876953,
+      0.006696224212646484,
+      0.10180878639221191,
+      1.0368242263793945,
+      21.286858797073364,
+      200.0011067390442,
+      Infinity,
+      Infinity,
+      Infinity
+    ],
+    "pruned_bf_time": [
+      0.0001499652862548828,
+      0.00036263465881347656,
+      0.0021452903747558594,
+      0.03079819679260254,
+      0.27295732498168945,
+      5.048422813415527,
+      90.75475215911865,
+      200.00045204162598,
+      Infinity,
+      Infinity
+    ],
+    "hybrid_time": [
+      0.0002532005310058594,
+      0.00038433074951171875,
+      0.00174713134765625,
+      0.03117656707763672,
+      0.18557238578796387,
+      0.38838791847229004,
+      9.715183973312378,
+      5.1573474407196045,
+      31.957043409347534,
+      200.000018119812
+    ],
+    "pure_bf_capital": [
+      78,
+      89,
+      116,
+      139,
+      176,
+      184,
+      208,
+      null,
+      null,
+      null
+    ],
+    "pruned_bf_capital": [
+      78,
+      89,
+      116,
+      139,
+      176,
+      184,
+      221,
+      245,
+      null,
+      null
+    ],
+    "hybrid_capital": [
+      78,
+      89,
+      116,
+      139,
+      176,
+      183,
+      221,
+      246,
+      251,
+      267
+    ]
+  },
+  "comparison_test": [
+    {
+      "n": 4,
+      "pure_time": 0.001092672348022461,
+      "pure_capital": 89,
+      "pure_solutions": 226,
+      "pruned_time": 0.0007781982421875,
+      "pruned_capital": 89,
+      "pruned_nodes": "N/A",
+      "pruned_pruned": 39,
+      "hybrid_time": 0.0007538795471191406,
+      "hybrid_capital": 89,
+      "hybrid_routes": 16,
+      "hybrid_dp_execs": 6,
+      "quality_match": true
+    },
+    {
+      "n": 5,
+      "pure_time": 0.011328935623168945,
+      "pure_capital": 116,
+      "pure_solutions": 2713,
+      "pruned_time": 0.00437164306640625,
+      "pruned_capital": 116,
+      "pruned_nodes": "N/A",
+      "pruned_pruned": 372,
+      "hybrid_time": 0.003500223159790039,
+      "hybrid_capital": 116,
+      "hybrid_routes": 65,
+      "hybrid_dp_execs": 48,
+      "quality_match": true
+    },
+    {
+      "n": 6,
+      "pure_time": 0.10162162780761719,
+      "pure_capital": 139,
+      "pure_solutions": 40696,
+      "pruned_time": 0.022746801376342773,
+      "pruned_capital": 139,
+      "pruned_nodes": "N/A",
+      "pruned_pruned": 4805,
+      "hybrid_time": 0.01710033416748047,
+      "hybrid_capital": 139,
+      "hybrid_routes": 326,
+      "hybrid_dp_execs": 300,
+      "quality_match": true
+    }
+  ],
+  "pruning_analysis": [
+    {
+      "n": 5,
+      "total_calls": 1821,
+      "total_pruned": 372,
+      "pruning_rate": 20.42833607907743,
+      "pruned_by_time": 0,
+      "pruned_by_bound": 41,
+      "pruned_by_capacity": 319,
+      "pruned_by_capital": 12,
+      "execution_time": 0.0051767826080322266,
+      "pct_time": 0.0,
+      "pct_bound": 11.021505376344086,
+      "pct_capacity": 85.75268817204301,
+      "pct_capital": 3.225806451612903
+    },
+    {
+      "n": 7,
+      "total_calls": 313181,
+      "total_pruned": 79924,
+      "pruning_rate": 25.520066670711188,
+      "pruned_by_time": 0,
+      "pruned_by_bound": 32270,
+      "pruned_by_capacity": 47654,
+      "pruned_by_capital": 0,
+      "execution_time": 0.529287576675415,
+      "pct_time": 0.0,
+      "pct_bound": 40.375857064211004,
+      "pct_capacity": 59.624142935789,
+      "pct_capital": 0.0
+    },
+    {
+      "n": 9,
+      "total_calls": 106305971,
+      "total_pruned": 33695842,
+      "pruning_rate": 31.697036095931058,
+      "pruned_by_time": 0,
+      "pruned_by_bound": 17514790,
+      "pruned_by_capacity": 16181052,
+      "pruned_by_capital": 0,
+      "execution_time": 98.15332889556885,
+      "pct_time": 0.0,
+      "pct_bound": 51.97908394750901,
+      "pct_capacity": 48.02091605249099,
+      "pct_capital": 0.0
+    },
+    {
+      "n": 11,
+      "total_calls": 211678408,
+      "total_pruned": 97444771,
+      "pruning_rate": 46.03434611998782,
+      "pruned_by_time": 0,
+      "pruned_by_bound": 60274749,
+      "pruned_by_capacity": 37170022,
+      "pruned_by_capital": 0,
+      "execution_time": 200.00031113624573,
+      "pct_time": 0.0,
+      "pct_bound": 61.85529339486057,
+      "pct_capacity": 38.14470660513944,
+      "pct_capital": 0.0
+    }
+  ],
+  "scalability_limits": {
+    "time_budget": [
+      1.0,
+      10.0,
+      60.0,
+      300.0
+    ],
+    "max_n": [
+      8,
+      10,
+      11,
+      11
+    ]
+  },
+  "quality_verification": [
+    {
+      "n": 3,
+      "pure_capital": 78,
+      "pruned_capital": 78,
+      "hybrid_capital": 78,
+      "match": true
+    },
+    {
+      "n": 4,
+      "pure_capital": 89,
+      "pruned_capital": 89,
+      "hybrid_capital": 89,
+      "match": true
+    },
+    {
+      "n": 5,
+      "pure_capital": 116,
+      "pruned_capital": 116,
+      "hybrid_capital": 116,
+      "match": true
+    }
+  ],
+  "characteristics_analysis": [
+    {
+      "characteristic": "High Profit, Loose Time",
+      "profit_margin": "high",
+      "time_constraint": "loose",
+      "capacity": "normal",
+      "pure_time": 0.00425410270690918,
+      "pruned_time": 0.003188610076904297,
+      "hybrid_time": 0.0017621517181396484
+    },
+    {
+      "characteristic": "High Profit, Tight Time",
+      "profit_margin": "high",
+      "time_constraint": "tight",
+      "capacity": "normal",
+      "pure_time": 0.0032930374145507812,
+      "pruned_time": 0.002061605453491211,
+      "hybrid_time": 0.0003139972686767578
+    },
+    {
+      "characteristic": "Low Profit, Loose Time",
+      "profit_margin": "low",
+      "time_constraint": "loose",
+      "capacity": "normal",
+      "pure_time": 0.004040241241455078,
+      "pruned_time": 0.0011310577392578125,
+      "hybrid_time": 0.0008282661437988281
+    },
+    {
+      "characteristic": "Low Profit, Tight Time",
+      "profit_margin": "low",
+      "time_constraint": "tight",
+      "capacity": "normal",
+      "pure_time": 0.0038700103759765625,
+      "pruned_time": 0.0020864009857177734,
+      "hybrid_time": 0.0001747608184814453
+    },
+    {
+      "characteristic": "High Profit, High Capacity",
+      "profit_margin": "high",
+      "time_constraint": "loose",
+      "capacity": "high",
+      "pure_time": 0.006051540374755859,
+      "pruned_time": 0.008836507797241211,
+      "hybrid_time": 0.0047075748443603516
+    }
+  ]
+}
