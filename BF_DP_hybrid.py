@@ -4,9 +4,47 @@ import time
 from pure_brute_force import pure_brute_force, is_valid_tour
 from pruning_brute_force import brute_force_with_pruning
 
+def unified_route_generator(visitable_ports, costs, travel_times, T_max, timeout, start_time):
+    """
+    Unified route generation for all algorithms.
+    Yields tours for each valid route.
+    """
+    for k in range(0, len(visitable_ports) + 1):
+        if time.time() - start_time > timeout:
+            break
+            
+        for subset in itertools.combinations(visitable_ports, k):
+            if time.time() - start_time > timeout:
+                break
+
+            # Quick time-based pruning
+            if len(subset) > 0:
+                min_time = 0
+                current = 0
+                remaining = list(subset)
+                
+                while remaining:
+                    next_port = min(remaining, key=lambda p: travel_times[current][p])
+                    min_time += travel_times[current][next_port] + 1
+                    current = next_port
+                    remaining.remove(next_port)
+                
+                min_time += travel_times[current][0]
+                
+                if min_time > T_max:
+                    continue
+
+            for permutation in itertools.permutations(subset):
+                if time.time() - start_time > timeout:
+                    break
+                    
+                tour = [0] + list(permutation) + [0]
+                yield tour
+
 def hybrid_brute_force_dp(instance, timeout=200.0):
     """
-    Hybrid algorithm: brute force for routes + dynamic programming for transactions.
+    Optimized hybrid algorithm: brute force for routes + efficient DP for transactions.
+    Uses sparse DP with exact capital tracking for better performance.
 
     Args:
         instance: dict with the same fields as previous versions
@@ -40,268 +78,267 @@ def hybrid_brute_force_dp(instance, timeout=200.0):
     stats = {
         'routes_explored': 0,
         'routes_pruned_time': 0,
+        'routes_pruned_capital': 0,
         'dp_executions': 0,
         'dp_total_time': 0
     }
 
-    # Pruning 1: Calculate bounds for DP
-    # Determine the possible capital range
-    max_theoretical_capital = r + B * max(sale_prices)
-
-    # Fast upper bound on achievable capital for a route
-    # Used to skip DP if route cannot beat current best
+    # Calculate bounds for pruning
     max_unit_margin = max(
         sale_prices[p] - purchase_prices[p]
         for p in range(1, n)
     )
+    max_possible_capital = r + B * max(sale_prices)
 
-    def route_capital_upper_bound():
-        # Maximum possible capital achievable on any route
-        return r + B * max(sale_prices)
-
-    # DP function for a fixed route
-    def dp_for_route(route, stats):
+    # Optimized DP function using sparse state representation
+    # For 0/1/-1 decisions, we use exact capital values in a reasonable range
+    def dp_for_route(route):
         """
-        Solves the optimal transaction problem for a fixed route using DP.
-
-        Args:
-            route: list of port indices (starts and ends at 0)
-
-        Returns:
-            tuple (final_capital, decision_sequence) or (None, None) if not feasible
+        Optimized DP using sparse state representation.
+        Uses exact capital values (no discretization) for better accuracy and performance.
         """
         stats['dp_executions'] += 1
         dp_start = time.time()
 
-        L = len(route) - 2  # Intermediate ports (excluding Amsterdams)
-
-        # If no intermediate ports, reject trivial tour
+        L = len(route) - 2
         if L == 0:
-            # Reject trivial tours [Amsterdam, Amsterdam]
             stats['dp_total_time'] += time.time() - dp_start
             return None, None
 
-        # Initialize DP table with proper discretization
-        # Use step-based discretization to reduce state space
-        discretization_step = max(1, int(max_theoretical_capital) // 1000)
-        max_capital = int(max_theoretical_capital)
-        MAX_DISCRETIZED_LEVELS = 200  # hard safety cap
-        num_discretized_levels = min(
-            (max_capital // discretization_step) + 1,
-            MAX_DISCRETIZED_LEVELS
-        )
+        # Use sparse representation: dict[load] -> dict[capital] -> (max_capital, decision)
+        # This is more efficient than dense arrays for 0/1/-1 decisions
+        # State: (load, capital) -> best achievable capital
+        
+        # Calculate exact travel costs and times for the route
+        total_travel_cost = 0
+        total_travel_time = 0
+        for i in range(len(route) - 1):
+            total_travel_cost += costs[route[i]][route[i + 1]]
+            total_travel_time += travel_times[route[i]][route[i + 1]]
+        
+        # Quick feasibility check
+        if r - total_travel_cost < 0 or total_travel_time > T_max:
+            stats['dp_total_time'] += time.time() - dp_start
+            return None, None
 
-        # Initialize with -infinity
-        # dp[discretized_capital][load] = maximum real capital
-        dp_current = [[-math.inf] * (B + 1) for _ in range(num_discretized_levels)]
-        dp_next = [[-math.inf] * (B + 1) for _ in range(num_discretized_levels)]
-
-        # Initial state: Start at Amsterdam, then travel to first port
-        # This fixes the bug where DP didn't account for initial travel cost
+        # Initialize: Start at Amsterdam, travel to first port
         first_port = route[1]
         travel_cost_to_first = costs[0][first_port]
         capital_after_first_travel = r - travel_cost_to_first
         
         if capital_after_first_travel < 0:
             stats['dp_total_time'] += time.time() - dp_start
-            return None, None  # Can't even reach first port
-        
-        initial_discretized_capital = min(int(capital_after_first_travel) // discretization_step, num_discretized_levels - 1)
-        if initial_discretized_capital < 0:
-            stats['dp_total_time'] += time.time() - dp_start
             return None, None
-        dp_current[initial_discretized_capital][0] = capital_after_first_travel
 
-        # Process each port in the route
-        # Note: dp_current now represents state AFTER arriving at current port
+        # Sparse DP: dp[load][capital] = best_capital_achievable
+        # Use sets to track reachable states efficiently
+        dp_prev = {}  # dict[load] -> dict[capital] -> best_capital
+        dp_curr = {}  # dict[load] -> dict[capital] -> best_capital
+        
+        # Initialize: at first port with load=0
+        if 0 not in dp_prev:
+            dp_prev[0] = {}
+        dp_prev[0][capital_after_first_travel] = capital_after_first_travel
+
+        # Track decisions only for the best path (memory efficient)
+        # decisions_track[port_idx][load][capital] = (decision, prev_load, prev_capital)
+        decisions_track = [{} for _ in range(L + 1)]
+
+        # Process each port
         for i in range(L):
-            current_port = route[i + 1]  # Current port we're at (already traveled here)
-            next_port_idx = i + 2  # Index in the route of the next port
+            port = route[i + 1]
+            dp_curr.clear()
 
-            # Clear dp_next
-            for cap in range(num_discretized_levels):
-                for load in range(B + 1):
-                    dp_next[cap][load] = -math.inf
+            # Determine next travel cost
+            if i < L - 1:
+                next_port = route[i + 2]
+                travel_cost = costs[port][next_port]
+            else:
+                travel_cost = costs[port][0]  # Return to Amsterdam
 
-            # For each possible state at the current port (after arriving)
-            for discretized_capital in range(num_discretized_levels):
-                for current_load in range(B + 1):
-                    current_capital = dp_current[discretized_capital][current_load]
-
-                    if current_capital < 0:
+            # Process each state in dp_prev
+            for load, capital_dict in dp_prev.items():
+                for capital, best_cap in capital_dict.items():
+                    if best_cap < 0:
                         continue
 
-                    # We're at current_port with current_capital and current_load
-                    # First, make a decision (buy/sell/nothing)
-                    # Then, travel to next port
-                    
                     # Decision options at current port
-                    decision_options = []
+                    options = []
                     
                     # Option 0: Do nothing
-                    decision_options.append((0, current_capital, current_load))
+                    options.append((0, capital, load))
                     
-                    # Option 1: Buy 1 unit (if there is capacity)
-                    if current_load < B and current_capital >= purchase_prices[current_port]:
-                        decision_options.append((1,
-                                               current_capital - purchase_prices[current_port],
-                                               current_load + 1))
+                    # Option 1: Buy
+                    if load < B and capital >= purchase_prices[port]:
+                        options.append((1, capital - purchase_prices[port], load + 1))
                     
-                    # Option 2: Sell 1 unit (if there is load)
-                    if current_load > 0:
-                        decision_options.append((2,
-                                               current_capital + sale_prices[current_port],
-                                               current_load - 1))
+                    # Option 2: Sell
+                    if load > 0:
+                        options.append((2, capital + sale_prices[port], load - 1))
 
-                    # After decision, travel to next port
-                    if i < L - 1:
-                        travel_cost = costs[current_port][route[next_port_idx]]
-                    else:
-                        # Last trip: return to Amsterdam
-                        travel_cost = costs[current_port][0]
-
-                    # For each decision option, apply travel cost and update DP
-                    for dec, capital_after_decision, load_after_decision in decision_options:
-                        capital_after_travel = capital_after_decision - travel_cost
-
-                        # Enforce time feasibility (travel + one operation)
-                        if travel_cost > T_max:
+                    # Apply travel cost and update DP
+                    for dec, cap_after_decision, load_after_decision in options:
+                        cap_after_travel = cap_after_decision - travel_cost
+                        
+                        if cap_after_travel < 0:
                             continue
 
-                        if capital_after_travel < 0:
-                            continue  # Not feasible
+                        # Update sparse DP
+                        if load_after_decision not in dp_curr:
+                            dp_curr[load_after_decision] = {}
+                        
+                        # Keep best capital for this (load, capital) state
+                        if cap_after_travel not in dp_curr[load_after_decision] or \
+                           cap_after_travel > dp_curr[load_after_decision][cap_after_travel]:
+                            dp_curr[load_after_decision][cap_after_travel] = cap_after_travel
+                            
+                            # Track decision for reconstruction (only best path)
+                            if i + 1 < len(decisions_track):
+                                if load_after_decision not in decisions_track[i + 1]:
+                                    decisions_track[i + 1][load_after_decision] = {}
+                                decisions_track[i + 1][load_after_decision][cap_after_travel] = (dec, load, capital)
 
-                        # Discretize capital using step size
-                        new_discretized_capital = min(int(capital_after_travel) // discretization_step, num_discretized_levels - 1)
-                        if new_discretized_capital < 0:
-                            continue
+            # Swap for next iteration
+            dp_prev, dp_curr = dp_curr, dp_prev
 
-                        # Update DP: state after arriving at next port
-                        if capital_after_travel > dp_next[new_discretized_capital][load_after_decision]:
-                            dp_next[new_discretized_capital][load_after_decision] = capital_after_travel
-                            # Decision recording deferred for performance
+        # Find best final state
+        best_final = -math.inf
+        best_load = None
+        best_capital = None
 
-            # Swap matrices for the next iteration
-            dp_current, dp_next = dp_next, dp_current
+        for load, capital_dict in dp_prev.items():
+            for capital, best_cap in capital_dict.items():
+                if best_cap > best_final:
+                    best_final = best_cap
+                    best_load = load
+                    best_capital = capital
 
-        # Find the best final state (after the last port)
-        best_final_capital = -math.inf
-        best_final_load = 0
-        best_discretized_capital = 0
-
-        for discretized_cap in range(num_discretized_levels):
-            for load in range(B + 1):
-                if dp_current[discretized_cap][load] > best_final_capital:
-                    best_final_capital = dp_current[discretized_cap][load]
-                    best_final_load = load
-                    best_discretized_capital = discretized_cap
-
-        if best_final_capital < 0:
+        if best_final < 0:
             stats['dp_total_time'] += time.time() - dp_start
             return None, None
 
-        stats['dp_total_time'] += time.time() - dp_start
-        return best_final_capital, None
+        # Reconstruct decisions (only if needed for best solution)
+        decisions = []
+        curr_load = best_load
+        curr_capital = best_capital
+        
+        for i in range(L, 0, -1):
+            if curr_load not in decisions_track[i] or \
+               curr_capital not in decisions_track[i][curr_load]:
+                # Fallback: can't reconstruct, return None for decisions
+                decisions = None
+                break
+            
+            dec, prev_load, prev_capital = decisions_track[i][curr_load][curr_capital]
+            decisions.append(dec)
+            curr_load = prev_load
+            curr_capital = prev_capital
 
-    # Generate ALL subsets of visitable ports
+        if decisions is not None:
+            decisions.reverse()
+
+        stats['dp_total_time'] += time.time() - dp_start
+        return best_final, decisions
+
+    # Use unified route generator (same as pruned method)
     visitable_ports = list(range(1, n))
     timeout_reached = False
 
-    for k in range(0, len(visitable_ports) + 1):
-        # Check timeout
-        if time.time() - start_time > timeout:
-            timeout_reached = True
-            break
-            
-        for subset in itertools.combinations(visitable_ports, k):
-            # Check timeout periodically
-            if stats['routes_explored'] % 100 == 0 and time.time() - start_time > timeout:
-                timeout_reached = True
-                break
-                
-            stats['routes_explored'] += 1
-
-            # Pruning by minimum time (optimized - use greedy nearest neighbor)
-            if len(subset) > 0:
-                # Calculate minimum route time using greedy TSP approximation
-                min_time = 0
-                current = 0  # Amsterdam
-                remaining = list(subset)
-
-                # Visit nearest neighbor (more accurate than arbitrary order)
-                while remaining:
-                    next_port = min(remaining, key=lambda p: travel_times[current][p])
-                    min_time += travel_times[current][next_port] + 1  # travel + operation
-                    current = next_port
-                    remaining.remove(next_port)
-
-                # Time to return to Amsterdam
-                min_time += travel_times[current][0]
-
-                if min_time > T_max:
-                    stats['routes_pruned_time'] += 1
-                    continue
-
-            # For each permutation (visit order)
-            for permutation in itertools.permutations(subset):
-                # Check timeout
-                if time.time() - start_time > timeout:
-                    timeout_reached = True
-                    break
-                    
-                route = [0] + list(permutation) + [0]
-
-                # --- exact travel time pruning (before DP) ---
-                total_travel_time = 0
-                total_travel_cost = 0
-                for i in range(len(route) - 1):
-                    total_travel_time += travel_times[route[i]][route[i + 1]]
-                    total_travel_cost += costs[route[i]][route[i + 1]]
-
-                # If even without operations the route is infeasible, skip
-                if total_travel_time > T_max or r - total_travel_cost < 0:
-                    continue
-
-                # --- NEW: capital upper bound pruning ---
-                if route_capital_upper_bound() <= best['capital']:
-                    continue
-
-                # Call DP only if route is promising
-                dp_result = dp_for_route(route, stats)
-
-                if dp_result[0] is not None:
-                    final_capital, decisions = dp_result
-
-                    # Skip reconstruction if not improving best
-                    if final_capital <= best['capital']:
-                        continue
-
-                    # Calculate exact total time
-                    total_time = 0
-                    for i in range(len(route) - 1):
-                        total_time += travel_times[route[i]][route[i + 1]]
-
-                    # If no decisions are returned, assume zero operation time
-                    operation_time = 0
-                    if decisions is not None:
-                        for dec in decisions:
-                            if dec != 0:
-                                operation_time += 1
-
-                    total_time += operation_time
-
-                    # Verify that the tour is not trivial before accepting it
-                    if is_valid_tour(route, final_capital, r, total_time):
-                        if final_capital > best['capital']:
-                            best['capital'] = final_capital
-                            best['tour'] = route.copy()
-                            best['decisions'] = decisions.copy() if decisions is not None else None
-                            best['time'] = total_time
-            
-            if timeout_reached:
-                break
+    for route in unified_route_generator(visitable_ports, costs, travel_times, T_max, timeout, start_time):
         if timeout_reached:
             break
+            
+        stats['routes_explored'] += 1
+
+        # Pre-DP pruning: exact travel cost/time check
+        total_travel_time = 0
+        total_travel_cost = 0
+        for i in range(len(route) - 1):
+            total_travel_time += travel_times[route[i]][route[i + 1]]
+            total_travel_cost += costs[route[i]][route[i + 1]]
+
+        # Pruning: infeasible routes
+        if total_travel_time > T_max or r - total_travel_cost < 0:
+            continue
+
+        # Pruning: capital upper bound (optimistic estimate)
+        # Maximum profit = B * max_unit_margin per port, but we can only visit L ports
+        L = len(route) - 2
+        optimistic_profit = min(L, B) * max_unit_margin
+        if r - total_travel_cost + optimistic_profit <= best['capital']:
+            stats['routes_pruned_capital'] += 1
+            continue
+
+        # For very small routes (L <= 2), brute force enumeration is faster than DP
+        # This avoids DP overhead for trivial cases
+        if L <= 2:
+            # Quick brute force enumeration
+            best_route_capital = -math.inf
+            best_route_decisions = None
+            
+            for decisions in itertools.product([0, 1, 2], repeat=L):
+                capital = r - total_travel_cost
+                load = 0
+                feasible = True
+                
+                for i in range(L):
+                    port = route[i + 1]
+                    
+                    if decisions[i] == 1:  # BUY
+                        if load >= B or capital < purchase_prices[port]:
+                            feasible = False
+                            break
+                        capital -= purchase_prices[port]
+                        load += 1
+                    elif decisions[i] == 2:  # SELL
+                        if load <= 0:
+                            feasible = False
+                            break
+                        capital += sale_prices[port]
+                        load -= 1
+                
+                if feasible and capital > best_route_capital:
+                    best_route_capital = capital
+                    best_route_decisions = list(decisions)
+            
+            if best_route_capital > best['capital']:
+                total_time = total_travel_time
+                if best_route_decisions:
+                    for dec in best_route_decisions:
+                        if dec != 0:
+                            total_time += 1
+                
+                if is_valid_tour(route, best_route_capital, r, total_time):
+                    best['capital'] = best_route_capital
+                    best['tour'] = route.copy()
+                    best['decisions'] = best_route_decisions
+                    best['time'] = total_time
+            continue
+
+        # Call optimized DP for larger routes
+        dp_result = dp_for_route(route)
+
+        if dp_result[0] is not None:
+            final_capital, decisions = dp_result
+
+            # Skip if not improving best
+            if final_capital <= best['capital']:
+                continue
+
+            # Calculate exact total time
+            total_time = total_travel_time
+            if decisions is not None:
+                for dec in decisions:
+                    if dec != 0:
+                        total_time += 1
+
+            # Verify tour is valid
+            if is_valid_tour(route, final_capital, r, total_time):
+                if final_capital > best['capital']:
+                    best['capital'] = final_capital
+                    best['tour'] = route.copy()
+                    best['decisions'] = decisions.copy() if decisions is not None else None
+                    best['time'] = total_time
 
     # Prepare result
     result = {
