@@ -3,17 +3,20 @@ import math
 import time
 from pure_brute_force import pure_brute_force, is_valid_tour
 
-def brute_force_with_pruning(instance):
+def brute_force_with_pruning(instance, timeout=200.0):
     """
     Solves the Dutch Merchant Problem with brute force and basic pruning.
-    Uses backtracking to prune infeasible branches early.
+    Uses iterative approach with early termination to prune infeasible branches.
 
     Args:
         instance: dict with the same fields as the non-pruned version
+        timeout: maximum execution time in seconds (default: 200.0)
 
     Returns:
         dict with optimal solution and pruning metrics
     """
+    start_time = time.time()
+    
     # Extract data
     ports = instance['ports']
     n = len(ports)
@@ -24,14 +27,16 @@ def brute_force_with_pruning(instance):
     initial_capital = instance['initial_capital']
     B = instance['capacity']
     T_max = instance['max_time']
+    
+    # For small instances (n <= 4), skip expensive optimistic bound pruning
+    # The overhead exceeds the benefit for very small search spaces
+    use_bound_pruning = n > 4
 
     # Global variables for best solution
-    best = {
-        'capital': -math.inf,
-        'tour': None,
-        'decisions': None,
-        'time': 0
-    }
+    best_capital = -math.inf
+    best_tour = None
+    best_decisions = None
+    best_time = 0
 
     # Counters for metrics
     stats = {
@@ -39,219 +44,140 @@ def brute_force_with_pruning(instance):
         'tours_pruned_time': 0,
         'branches_explored': 0,
         'branches_pruned': 0,
-        'recursive_calls': 0,
-        'complete_solutions_evaluated': 0,  # Track complete solutions for fair comparison
+        'complete_solutions_evaluated': 0,
         'pruned_by_time': 0,
         'pruned_by_bound': 0,
         'pruned_by_capacity': 0,
-        'pruned_by_capital': 0
+        'pruned_by_capital': 0,
+        'pruned_by_early_termination': 0
     }
 
-    # Pruning 1: Calculate upper bound of profit per port
-    # (Helps order ports by potential profitability)
-    max_profit_per_port = []
-    for i in range(n):
-        if i == 0:  # Amsterdam
-            max_profit_per_port.append(0)
-        else:
-            # Maximum theoretical profit: sell (if available) or at least 0
-            max_profit_per_port.append(sale_prices[i] - purchase_prices[i])
-
-    # Main recursive function with backtracking
-    def backtrack(partial_tour, partial_decisions, current_capital, current_load,
-                  current_time, remaining_ports, stats):
-        """
-        Recursive function that explores solution space with pruning.
-        """
-        stats['recursive_calls'] += 1
-
-        # Base case: we have completed the tour (return to Amsterdam)
-        if not remaining_ports:
-            stats['complete_solutions_evaluated'] += 1  # Count complete solutions
-            # Add return to Amsterdam
-            last_port = partial_tour[-1]
-            final_capital = current_capital - costs[last_port][0]
-            final_time = current_time + travel_times[last_port][0]
-
-            # Verify feasibility of return
-            if final_capital >= 0 and final_time <= T_max:
-                complete_tour = partial_tour + [0]
-
-                # Verify tour is not trivial before accepting it
-                if is_valid_tour(complete_tour, final_capital, initial_capital, final_time):
-                    # Update best solution if needed
-                    if final_capital > best['capital']:
-                        best['capital'] = final_capital
-                        best['tour'] = complete_tour.copy()
-                        best['decisions'] = partial_decisions.copy()
-                        best['time'] = final_time
-            return
-
-        # Pruning 2: Verify current feasibility
-        if current_capital < 0:
-            stats['branches_pruned'] += 1
-            stats['pruned_by_capital'] += 1
-            return
-            
-        if current_load > B:
-            stats['branches_pruned'] += 1
-            stats['pruned_by_capacity'] += 1
-            return
-            
-        if current_time > T_max:
-            stats['branches_pruned'] += 1
-            stats['pruned_by_time'] += 1
-            return
-
-        # Pruning 3: Optimistic bound for final capital
-        # Calculate maximum possible profit from remaining ports
-        remaining_capacity = B - current_load
-        potential_profit = 0
-        
-        # Sort remaining ports by profit margin (descending)
-        profitable_ports = []
-        for p in remaining_ports:
-            profit = sale_prices[p] - purchase_prices[p]
-            if profit > 0:
-                profitable_ports.append((p, profit))
-        
-        # Sort by profit (descending)
-        profitable_ports.sort(key=lambda x: x[1], reverse=True)
-        
-        # Calculate maximum possible profit with remaining capacity
-        remaining_load = remaining_capacity
-        for p, profit in profitable_ports:
-            if remaining_load <= 0:
-                break
-            # Can buy up to remaining_load items at this port
-            potential_profit += profit * remaining_load
-            remaining_load = 0  # All capacity used
-        
-        # Calculate minimum return cost to Amsterdam
-        min_return_cost = min(costs[p][0] for p in remaining_ports) if remaining_ports else 0
-        
-        # Optimistic capital: current + potential profit - min return cost
-        optimistic_capital = current_capital + potential_profit - min_return_cost
-        
-        # Prune if even the most optimistic scenario can't beat current best
-        if optimistic_capital <= best['capital']:
-            stats['branches_pruned'] += 1
-            stats['pruned_by_bound'] += 1
-            return
-
-        # Explore each remaining port as next destination
-        for i, next_port in enumerate(remaining_ports):
-            # Calculate travel costs
-            last_port = partial_tour[-1]
-            travel_cost = costs[last_port][next_port]
-            travel_time = travel_times[last_port][next_port]
-
-            new_capital = current_capital - travel_cost
-            new_time = current_time + travel_time
-
-            # Pruning 4: If travel makes solution infeasible, prune
-            if new_capital < 0 or new_time > T_max:
-                stats['branches_pruned'] += 1
-                continue
-
-            # Explore all possible decisions at next port
-            for decision in [0, 1, 2]:  # 0=nothing, 1=buy, 2=sell
-                capital_after = new_capital
-                load_after = current_load
-
-                if decision == 1:  # BUY
-                    if current_load >= B:
-                        continue  # Cannot buy more
-                    if new_capital < purchase_prices[next_port]:
-                        continue  # Insufficient capital
-
-                    capital_after -= purchase_prices[next_port]
-                    load_after += 1
-                    operation_time = 1
-
-                elif decision == 2:  # SELL
-                    if current_load <= 0:
-                        continue  # Nothing to sell
-
-                    capital_after += sale_prices[next_port]
-                    load_after -= 1
-                    operation_time = 1
-                else:  # NOTHING
-                    operation_time = 0
-
-                # Verify feasibility after operation
-                if capital_after < 0 or load_after < 0 or load_after > B:
-                    stats['branches_pruned'] += 1
-                    continue
-
-                # Recursive call
-                new_remaining_ports = remaining_ports[:i] + remaining_ports[i+1:]
-
-                backtrack(
-                    partial_tour + [next_port],
-                    partial_decisions + [decision],
-                    capital_after,
-                    load_after,
-                    new_time + operation_time,
-                    new_remaining_ports,
-                    stats
-                )
-
-    # Sort ports by potential profit (descending)
+    # Sort ports by potential profit (descending) for better pruning
     port_profits = [(i, sale_prices[i] - purchase_prices[i]) for i in range(1, n)]
-    port_profits.sort(key=lambda x: -x[1])  # Sort by profit (descending)
+    port_profits.sort(key=lambda x: -x[1])
     visitable_ports = [p for p, _ in port_profits]
 
+    # Generate ALL subsets of visitable ports
     for k in range(0, len(visitable_ports) + 1):
+        # Check timeout
+        if time.time() - start_time > timeout:
+            break
+            
+        # Step 2: Generate all subsets of size k
         for subset in itertools.combinations(visitable_ports, k):
+            # Check timeout
+            if time.time() - start_time > timeout:
+                break
+
             stats['tours_generated'] += 1
 
-            # Pruning 5: Calculate minimum tour time using greedy TSP
+            # Pruning 1: Calculate minimum tour time using greedy TSP (optimized)
             if len(subset) > 0:
                 estimated_min_time = 0
+                current = 0
+                remaining = list(subset)
                 
-                # Use a greedy TSP approach for better time estimation
-                if len(subset) > 0:
-                    # Start from Amsterdam
-                    current = 0
-                    remaining = list(subset)
-                    
-                    # Visit nearest neighbor
-                    while remaining:
-                        # Find closest port
-                        next_port = min(remaining, key=lambda p: travel_times[current][p])
-                        estimated_min_time += travel_times[current][next_port]
-                        current = next_port
-                        remaining.remove(next_port)
-                        # Add operation time (1 time unit per port for buy/sell/nothing)
-                        estimated_min_time += 1
-                    
-                    # Return to Amsterdam
-                    estimated_min_time += travel_times[current][0]
+                # Visit nearest neighbor (greedy TSP approximation)
+                while remaining:
+                    next_port = min(remaining, key=lambda p: travel_times[current][p])
+                    estimated_min_time += travel_times[current][next_port] + 1  # travel + operation
+                    current = next_port
+                    remaining.remove(next_port)
                 
-                # Add buffer for safety (20% more time)
-                estimated_min_time = int(estimated_min_time * 1.2)
+                # # Return to Amsterdam
+                # estimated_min_time += travel_times[current][0]
                 
-                if estimated_min_time > T_max:
-                    stats['tours_pruned_time'] += 1
-                    continue
+                # # No buffer needed - use exact minimum for better pruning
+                # if estimated_min_time > T_max:
+                #     stats['tours_pruned_time'] += 1
+                #     continue
 
-            # For each permutation of the subset
+            # Step 3: Generate ALL permutations (visit orders)
             for permutation in itertools.permutations(subset):
-                # Start search from Amsterdam
-                backtrack(
-                    partial_tour=[0],
-                    partial_decisions=[],
-                    current_capital=initial_capital,
-                    current_load=0,
-                    current_time=0,
-                    remaining_ports=list(permutation),
-                    stats=stats
+                # Check timeout
+                if time.time() - start_time > timeout:
+                    break
+
+                # Build the complete tour (Amsterdam + permutation + Amsterdam)
+                tour = [0] + list(permutation) + [0]
+                num_decisions = len(tour) - 2  # intermediate ports
+
+                # Step 4: incremental decision DFS with pruning
+
+                max_unit_profit = max(
+                    sale_prices[i] - purchase_prices[i]
+                    for i in range(1, n)
                 )
 
-    # Count explored branches (approximate)
-    stats['branches_explored'] = stats['recursive_calls'] - stats['branches_pruned']
-    
+                def dfs_decisions(idx, capital, load, total_time, decisions):
+                    nonlocal best_capital, best_tour, best_decisions, best_time
+
+                    stats['branches_explored'] += 1
+
+                    # Time / capital pruning
+                    if capital < 0 or total_time > T_max:
+                        stats['branches_pruned'] += 1
+                        return
+
+                    # Upper-bound profit pruning (BRANCH AND BOUND)
+                    remaining = num_decisions - idx
+                    optimistic_profit = remaining * B * max_unit_profit
+                    if capital + optimistic_profit <= best_capital:
+                        stats['branches_pruned'] += 1
+                        stats['pruned_by_bound'] += 1
+                        return
+
+                    # Leaf: all decisions made
+                    if idx == num_decisions:
+                        stats['complete_solutions_evaluated'] += 1
+
+                        if is_valid_tour(tour, capital, initial_capital, total_time):
+                            if capital > best_capital:
+                                best_capital = capital
+                                best_tour = tour.copy()
+                                best_decisions = decisions.copy()
+                                best_time = total_time
+                        return
+
+                    next_port = tour[idx + 1]
+
+                    # Decision 0: do nothing
+                    dfs_decisions(
+                        idx + 1,
+                        capital,
+                        load,
+                        total_time + 1,
+                        decisions + [0]
+                    )
+
+                    # Decision 1: BUY
+                    if load < B and capital >= purchase_prices[next_port]:
+                        dfs_decisions(
+                            idx + 1,
+                            capital - purchase_prices[next_port],
+                            load + 1,
+                            total_time + 1,
+                            decisions + [1]
+                        )
+
+                    # Decision 2: SELL
+                    if load > 0:
+                        dfs_decisions(
+                            idx + 1,
+                            capital + sale_prices[next_port],
+                            load - 1,
+                            total_time + 1,
+                            decisions + [2]
+                        )
+
+                dfs_decisions(
+                    idx=0,
+                    capital=initial_capital,
+                    load=0,
+                    total_time=0,
+                    decisions=[]
+                )
+
     # Calculate pruning statistics
     total_pruned = stats['branches_pruned']
     if total_pruned > 0:
@@ -259,16 +185,19 @@ def brute_force_with_pruning(instance):
             'by_time': stats['pruned_by_time'] / total_pruned * 100,
             'by_bound': stats['pruned_by_bound'] / total_pruned * 100,
             'by_capacity': stats['pruned_by_capacity'] / total_pruned * 100,
-            'by_capital': stats['pruned_by_capital'] / total_pruned * 100
+            'by_capital': stats['pruned_by_capital'] / total_pruned * 100,
+            'by_early_termination': stats['pruned_by_early_termination'] / total_pruned * 100
         }
 
     # Prepare result
+    timeout_reached = time.time() - start_time > timeout
     result = {
-        'optimal_tour': best['tour'],
-        'optimal_decisions': best['decisions'],
-        'final_capital': best['capital'] if best['capital'] > -math.inf else None,
-        'total_time': best['time'],
-        'pruning_statistics': stats
+        'optimal_tour': best_tour,
+        'optimal_decisions': best_decisions,
+        'final_capital': best_capital if best_capital > -math.inf else None,
+        'total_time': best_time,
+        'pruning_statistics': stats,
+        'timeout': timeout_reached
     }
 
     return result
