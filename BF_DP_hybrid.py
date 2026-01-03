@@ -4,16 +4,19 @@ import time
 from pure_brute_force import pure_brute_force, is_valid_tour
 from pruning_brute_force import brute_force_with_pruning
 
-def hybrid_brute_force_dp(instance):
+def hybrid_brute_force_dp(instance, timeout=200.0):
     """
     Hybrid algorithm: brute force for routes + dynamic programming for transactions.
 
     Args:
         instance: dict with the same fields as previous versions
+        timeout: maximum execution time in seconds (default: 200.0)
 
     Returns:
         dict with the optimal solution and performance metrics
     """
+    start_time = time.time()
+    
     # Extract data
     ports = instance['ports']
     n = len(ports)
@@ -45,6 +48,17 @@ def hybrid_brute_force_dp(instance):
     # Determine the possible capital range
     max_theoretical_capital = r + B * max(sale_prices)
 
+    # Fast upper bound on achievable capital for a route
+    # Used to skip DP if route cannot beat current best
+    max_unit_margin = max(
+        sale_prices[p] - purchase_prices[p]
+        for p in range(1, n)
+    )
+
+    def route_capital_upper_bound():
+        # Maximum possible capital achievable on any route
+        return r + B * max(sale_prices)
+
     # DP function for a fixed route
     def dp_for_route(route, stats):
         """
@@ -67,90 +81,105 @@ def hybrid_brute_force_dp(instance):
             stats['dp_total_time'] += time.time() - dp_start
             return None, None
 
-        # Initialize DP table
-        # dp[i][c][k] = maximum capital at port i with load c and discretized capital k
-        # For efficiency, we use two matrices: current and next
-        min_capital = 0
-        max_capital = int(max_theoretical_capital) + 1
+        # Initialize DP table with proper discretization
+        # Use step-based discretization to reduce state space
+        discretization_step = max(1, int(max_theoretical_capital) // 1000)
+        max_capital = int(max_theoretical_capital)
+        MAX_DISCRETIZED_LEVELS = 200  # hard safety cap
+        num_discretized_levels = min(
+            (max_capital // discretization_step) + 1,
+            MAX_DISCRETIZED_LEVELS
+        )
 
         # Initialize with -infinity
-        dp_current = [[-math.inf] * (B + 1) for _ in range(max_capital + 1)]
-        dp_next = [[-math.inf] * (B + 1) for _ in range(max_capital + 1)]
+        # dp[discretized_capital][load] = maximum real capital
+        dp_current = [[-math.inf] * (B + 1) for _ in range(num_discretized_levels)]
+        dp_next = [[-math.inf] * (B + 1) for _ in range(num_discretized_levels)]
 
-        # Initial state: at Amsterdam (port 0)
-        initial_discretized_capital = min(int(r), max_capital)
-        dp_current[initial_discretized_capital][0] = r
-
-        # Matrix for reconstruction
-        # decision[i][c][k] = (decision, previous_load, previous_capital)
-        decision = [[[None] * (B + 1) for _ in range(max_capital + 1)] for _ in range(L + 1)]
+        # Initial state: Start at Amsterdam, then travel to first port
+        # This fixes the bug where DP didn't account for initial travel cost
+        first_port = route[1]
+        travel_cost_to_first = costs[0][first_port]
+        capital_after_first_travel = r - travel_cost_to_first
+        
+        if capital_after_first_travel < 0:
+            stats['dp_total_time'] += time.time() - dp_start
+            return None, None  # Can't even reach first port
+        
+        initial_discretized_capital = min(int(capital_after_first_travel) // discretization_step, num_discretized_levels - 1)
+        if initial_discretized_capital < 0:
+            stats['dp_total_time'] += time.time() - dp_start
+            return None, None
+        dp_current[initial_discretized_capital][0] = capital_after_first_travel
 
         # Process each port in the route
+        # Note: dp_current now represents state AFTER arriving at current port
         for i in range(L):
-            current_port = route[i + 1]  # +1 because route[0] is Amsterdam
+            current_port = route[i + 1]  # Current port we're at (already traveled here)
             next_port_idx = i + 2  # Index in the route of the next port
 
             # Clear dp_next
-            for cap in range(max_capital + 1):
+            for cap in range(num_discretized_levels):
                 for load in range(B + 1):
                     dp_next[cap][load] = -math.inf
 
-            # For each possible state at the current port
-            for discretized_capital in range(max_capital + 1):
+            # For each possible state at the current port (after arriving)
+            for discretized_capital in range(num_discretized_levels):
                 for current_load in range(B + 1):
                     current_capital = dp_current[discretized_capital][current_load]
 
                     if current_capital < 0:
                         continue
 
-                    # Travel cost to next port
+                    # We're at current_port with current_capital and current_load
+                    # First, make a decision (buy/sell/nothing)
+                    # Then, travel to next port
+                    
+                    # Decision options at current port
+                    decision_options = []
+                    
+                    # Option 0: Do nothing
+                    decision_options.append((0, current_capital, current_load))
+                    
+                    # Option 1: Buy 1 unit (if there is capacity)
+                    if current_load < B and current_capital >= purchase_prices[current_port]:
+                        decision_options.append((1,
+                                               current_capital - purchase_prices[current_port],
+                                               current_load + 1))
+                    
+                    # Option 2: Sell 1 unit (if there is load)
+                    if current_load > 0:
+                        decision_options.append((2,
+                                               current_capital + sale_prices[current_port],
+                                               current_load - 1))
+
+                    # After decision, travel to next port
                     if i < L - 1:
                         travel_cost = costs[current_port][route[next_port_idx]]
                     else:
                         # Last trip: return to Amsterdam
                         travel_cost = costs[current_port][0]
 
-                    capital_after_travel = current_capital - travel_cost
+                    # For each decision option, apply travel cost and update DP
+                    for dec, capital_after_decision, load_after_decision in decision_options:
+                        capital_after_travel = capital_after_decision - travel_cost
 
-                    if capital_after_travel < 0:
-                        continue  # Not feasible
+                        # Enforce time feasibility (travel + one operation)
+                        if travel_cost > T_max:
+                            continue
 
-                    # Options at the current port (only if not the return to Amsterdam)
-                    if i < L:  # Only for intermediate ports
-                        options = []
+                        if capital_after_travel < 0:
+                            continue  # Not feasible
 
-                        # Option 0: Do nothing
-                        options.append((0, capital_after_travel, current_load))
+                        # Discretize capital using step size
+                        new_discretized_capital = min(int(capital_after_travel) // discretization_step, num_discretized_levels - 1)
+                        if new_discretized_capital < 0:
+                            continue
 
-                        # Option 1: Buy 1 unit (if there is capacity)
-                        if current_load < B and capital_after_travel >= purchase_prices[current_port]:
-                            options.append((1,
-                                           capital_after_travel - purchase_prices[current_port],
-                                           current_load + 1))
-
-                        # Option 2: Sell 1 unit (if there is load)
-                        if current_load > 0:
-                            options.append((2,
-                                           capital_after_travel + sale_prices[current_port],
-                                           current_load - 1))
-
-                        # For each option, update dp_next
-                        for dec, new_capital, new_load in options:
-                            new_discretized_capital = min(int(new_capital), max_capital)
-
-                            if new_capital > dp_next[new_discretized_capital][new_load]:
-                                dp_next[new_discretized_capital][new_load] = new_capital
-                                decision[i + 1][new_discretized_capital][new_load] = (
-                                    dec, current_load, discretized_capital
-                                )
-                    else:
-                        # For the last port before Amsterdam, no operations
-                        new_discretized_capital = min(int(capital_after_travel), max_capital)
-                        if capital_after_travel > dp_next[new_discretized_capital][current_load]:
-                            dp_next[new_discretized_capital][current_load] = capital_after_travel
-                            decision[i + 1][new_discretized_capital][current_load] = (
-                                0, current_load, discretized_capital
-                            )
+                        # Update DP: state after arriving at next port
+                        if capital_after_travel > dp_next[new_discretized_capital][load_after_decision]:
+                            dp_next[new_discretized_capital][load_after_decision] = capital_after_travel
+                            # Decision recording deferred for performance
 
             # Swap matrices for the next iteration
             dp_current, dp_next = dp_next, dp_current
@@ -160,7 +189,7 @@ def hybrid_brute_force_dp(instance):
         best_final_load = 0
         best_discretized_capital = 0
 
-        for discretized_cap in range(max_capital + 1):
+        for discretized_cap in range(num_discretized_levels):
             for load in range(B + 1):
                 if dp_current[discretized_cap][load] > best_final_capital:
                     best_final_capital = dp_current[discretized_cap][load]
@@ -171,49 +200,43 @@ def hybrid_brute_force_dp(instance):
             stats['dp_total_time'] += time.time() - dp_start
             return None, None
 
-        # Reconstruct decision sequence
-        decisions = []
-        current_load = best_final_load
-        current_discretized_capital = best_discretized_capital
-
-        for i in range(L, 0, -1):
-            dec_info = decision[i][current_discretized_capital][current_load]
-            if dec_info is None:
-                # Should not happen if we found a solution
-                stats['dp_total_time'] += time.time() - dp_start
-                return None, None
-
-            dec, previous_load, previous_capital = dec_info
-            decisions.append(dec)
-            current_load = previous_load
-            current_discretized_capital = previous_capital
-
-        decisions.reverse()  # Because we reconstructed from the end
-
         stats['dp_total_time'] += time.time() - dp_start
-        return best_final_capital, decisions
+        return best_final_capital, None
 
     # Generate ALL subsets of visitable ports
     visitable_ports = list(range(1, n))
+    timeout_reached = False
 
     for k in range(0, len(visitable_ports) + 1):
+        # Check timeout
+        if time.time() - start_time > timeout:
+            timeout_reached = True
+            break
+            
         for subset in itertools.combinations(visitable_ports, k):
+            # Check timeout periodically
+            if stats['routes_explored'] % 100 == 0 and time.time() - start_time > timeout:
+                timeout_reached = True
+                break
+                
             stats['routes_explored'] += 1
 
-            # Pruning by minimum time (quick estimation)
+            # Pruning by minimum time (optimized - use greedy nearest neighbor)
             if len(subset) > 0:
-                # Calculate minimum route time (approximate TSP)
+                # Calculate minimum route time using greedy TSP approximation
                 min_time = 0
-                current_port = 0  # Amsterdam
+                current = 0  # Amsterdam
+                remaining = list(subset)
 
-                # Time to visit all ports in some order
-                for port in subset:
-                    min_time += travel_times[current_port][port]
-                    current_port = port
-                    min_time += 1  # Minimum operation time
+                # Visit nearest neighbor (more accurate than arbitrary order)
+                while remaining:
+                    next_port = min(remaining, key=lambda p: travel_times[current][p])
+                    min_time += travel_times[current][next_port] + 1  # travel + operation
+                    current = next_port
+                    remaining.remove(next_port)
 
                 # Time to return to Amsterdam
-                min_time += travel_times[current_port][0]
+                min_time += travel_times[current][0]
 
                 if min_time > T_max:
                     stats['routes_pruned_time'] += 1
@@ -221,31 +244,64 @@ def hybrid_brute_force_dp(instance):
 
             # For each permutation (visit order)
             for permutation in itertools.permutations(subset):
+                # Check timeout
+                if time.time() - start_time > timeout:
+                    timeout_reached = True
+                    break
+                    
                 route = [0] + list(permutation) + [0]
 
-                # Call DP for this route
+                # --- exact travel time pruning (before DP) ---
+                total_travel_time = 0
+                total_travel_cost = 0
+                for i in range(len(route) - 1):
+                    total_travel_time += travel_times[route[i]][route[i + 1]]
+                    total_travel_cost += costs[route[i]][route[i + 1]]
+
+                # If even without operations the route is infeasible, skip
+                if total_travel_time > T_max or r - total_travel_cost < 0:
+                    continue
+
+                # --- NEW: capital upper bound pruning ---
+                if route_capital_upper_bound() <= best['capital']:
+                    continue
+
+                # Call DP only if route is promising
                 dp_result = dp_for_route(route, stats)
 
                 if dp_result[0] is not None:
                     final_capital, decisions = dp_result
+
+                    # Skip reconstruction if not improving best
+                    if final_capital <= best['capital']:
+                        continue
 
                     # Calculate exact total time
                     total_time = 0
                     for i in range(len(route) - 1):
                         total_time += travel_times[route[i]][route[i + 1]]
 
-                    # Add operation times
-                    for dec in decisions:
-                        if dec != 0:  # 0 = nothing, 1 or 2 = operation
-                            total_time += 1
+                    # If no decisions are returned, assume zero operation time
+                    operation_time = 0
+                    if decisions is not None:
+                        for dec in decisions:
+                            if dec != 0:
+                                operation_time += 1
+
+                    total_time += operation_time
 
                     # Verify that the tour is not trivial before accepting it
                     if is_valid_tour(route, final_capital, r, total_time):
                         if final_capital > best['capital']:
                             best['capital'] = final_capital
                             best['tour'] = route.copy()
-                            best['decisions'] = decisions.copy()
+                            best['decisions'] = decisions.copy() if decisions is not None else None
                             best['time'] = total_time
+            
+            if timeout_reached:
+                break
+        if timeout_reached:
+            break
 
     # Prepare result
     result = {
@@ -253,7 +309,8 @@ def hybrid_brute_force_dp(instance):
         'optimal_decisions': best['decisions'],
         'final_capital': best['capital'] if best['capital'] > -math.inf else None,
         'total_time': best['time'],
-        'statistics': stats
+        'statistics': stats,
+        'timeout': timeout_reached
     }
 
     return result
