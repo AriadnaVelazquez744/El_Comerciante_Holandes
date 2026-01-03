@@ -34,7 +34,7 @@ def is_valid_tour(tour, final_capital, initial_capital, total_time):
     
     return True
 
-def pure_brute_force(instance):
+def pure_brute_force(instance, timeout=200.0):
     """
     Solves the Dutch Merchant Problem using pure brute force.
     Only for VERY small instances (n <= 4, |M| = 1).
@@ -49,6 +49,7 @@ def pure_brute_force(instance):
             - 'initial_capital': r
             - 'capacity': B
             - 'max_time': T_max
+        timeout: maximum execution time in seconds (default: 200.0)
 
     Returns:
         dict with:
@@ -57,7 +58,11 @@ def pure_brute_force(instance):
             - 'final_capital': optimal value
             - 'total_time': time of the optimal tour
             - 'explored_solutions': number of solutions evaluated
+            - 'timeout': True if timeout was reached, False otherwise
     """
+    import time
+    
+    start_time = time.time()
 
     # Extract instance data
     ports = instance['ports']
@@ -76,17 +81,31 @@ def pure_brute_force(instance):
     best_decisions = None
     best_time = 0
     explored_solutions = 0
+    timeout_reached = False
 
     # Generate ALL subsets of visitable ports (except Amsterdam)
     visitable_ports = list(range(1, n))  # port indices, excluding 0 (Amsterdam)
 
     # Step 1: Explore all subset sizes
     for k in range(0, len(visitable_ports) + 1):
+        # Check timeout before starting new subset size
+        if time.time() - start_time > timeout:
+            timeout_reached = True
+            break
+            
         # Step 2: Generate all subsets of size k
         for subset in itertools.combinations(visitable_ports, k):
+            # Check timeout
+            if time.time() - start_time > timeout:
+                timeout_reached = True
+                break
 
             # Step 3: Generate ALL permutations (visit orders)
             for permutation in itertools.permutations(subset):
+                # Check timeout
+                if time.time() - start_time > timeout:
+                    timeout_reached = True
+                    break
 
                 # Build the complete tour (Amsterdam + permutation + Amsterdam)
                 tour = [0] + list(permutation) + [0]
@@ -98,13 +117,20 @@ def pure_brute_force(instance):
 
                 # Generate all decision combinations
                 for decisions in itertools.product([0, 1, 2], repeat=num_decisions):
-                    explored_solutions += 1
+                    # Check timeout periodically (every 1000 solutions to reduce overhead)
+                    # But always check on first iteration (explored_solutions == 0)
+                    if (explored_solutions % 1000 == 0 or explored_solutions == 0) and time.time() - start_time > timeout:
+                        timeout_reached = True
+                        break
 
                     # TOUR SIMULATION
                     capital = r
                     load = 0
                     total_time = 0
                     feasible = True
+
+                    if feasible and not timeout_reached:
+                        explored_solutions += 1
 
                     # Traverse the tour port by port
                     for i in range(len(tour) - 1):
@@ -155,7 +181,7 @@ def pure_brute_force(instance):
                         feasible = False
 
                     # If the solution is feasible, verify it's not trivial
-                    if feasible:
+                    if feasible and not timeout_reached:
                         # Reject trivial tours
                         if not is_valid_tour(tour, capital, r, total_time):
                             continue
@@ -166,6 +192,15 @@ def pure_brute_force(instance):
                             best_tour = tour.copy()
                             best_decisions = list(decisions)
                             best_time = total_time
+                    
+                    if timeout_reached:
+                        break
+                if timeout_reached:
+                    break
+            if timeout_reached:
+                break
+        if timeout_reached:
+            break
 
     # Prepare result
     result = {
@@ -173,7 +208,8 @@ def pure_brute_force(instance):
         'optimal_decisions': best_decisions,
         'final_capital': best_capital if best_capital > -math.inf else None,
         'total_time': best_time,
-        'explored_solutions': explored_solutions
+        'explored_solutions': explored_solutions,
+        'timeout': timeout_reached
     }
 
     return result
