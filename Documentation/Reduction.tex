@@ -1,0 +1,260 @@
+\documentclass{article} \usepackage[english]{babel} \usepackage[utf8]{inputenc}
+\usepackage{amsmath,amssymb} \usepackage{graphicx} \usepackage{hyperref}
+
+\title{Complexity Analysis of the Dutch Merchant Problem} \author{} \date{}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract} This document presents a computational complexity analysis of
+the Dutch Merchant Problem, demonstrating its NP-hardness via a polynomial-time
+reduction from the Prize-Collecting Traveling Salesman Problem (PCTSP) and
+establishing its NP-Completeness. \end{abstract}
+
+\section{Introduction} \label{sec:introduction}
+
+The Dutch Merchant Problem (DMP) is a combinatorial optimization problem that
+models the strategic route and transaction decisions of a maritime merchant
+under multiple constraints. This work formally demonstrates that its associated
+decision problem is \textbf{NP-Complete}. The proof is structured in two main
+parts: (1) establishing its \textbf{NP-hardness} via a polynomial-time reduction
+from the Prize-Collecting TSP, and (2) proving its \textbf{membership in the
+class NP} by describing a polynomial-time verification algorithm. This
+fundamental result implies that no efficient exact algorithm (running in
+polynomial time) exists for solving arbitrary-sized instances unless P = NP,
+thus justifying the subsequent development of approximation algorithms and
+heuristics in the project's later phases.
+
+\section{Proof of NP-Hardness} \label{sec:np-hardness}
+
+\subsection{Formal Definition of the Dutch Merchant Problem (DMP)}
+\label{subsec:def_dmp}
+
+An instance of the \textsc{DutchMerchant} problem is defined by the tuple $(G,
+r, \mathcal{M}, \mathcal{P}, B, T_{max}, f)$ where:
+
+\begin{itemize} \item $G=(V, E)$ is a complete, undirected graph representing
+the port network. $V = \{v_0, v_1, ..., v_n\}$, with $v_0$ being the origin port
+(Amsterdam). \item $r \in \mathbb{R}^+$ is the initial capital. \item
+$\mathcal{M}$ is the set of $k$ commodity types. \item $\mathcal{P} = \{
+(c^{buy}_{v,m}, c^{sell}_{v,m}) \mid v \in V \setminus \{v_0\}, m \in
+\mathcal{M} \}$ defines the purchase and sale price for each commodity at each
+port. \item $B \in \mathbb{N}$ is the maximum cargo capacity of the ship (in
+commodity units). \item $T_{max} \in \mathbb{R}^+$ is the total maximum allowed
+duration for the expedition. \item $f: E \rightarrow \mathbb{R}^+$ assigns to
+each edge $e=(u,v)$ a travel time $t_{uv}$ and an operational cost $c_{uv}$.
+\end{itemize}
+
+A \textbf{feasible solution} is a simple cycle $(v_0, v_{i_1}, ..., v_{i_l},
+v_0)$ and a sequence of buy/sell decisions at each visited port, such that: 1)
+The capacity $B$ is never exceeded. 2) The capital never becomes negative after
+covering operational costs. 3) The total time (travel + operations) $\leq
+T_{max}$.
+
+The \textbf{objective} is to maximize the final capital upon returning to $v_0$.
+
+\subsection{Definition of the Reduced Problem: \textsc{Restricted-DMP}}
+\label{subsec:def_dmp_rest}
+
+For the reduction, we define a heavily restricted version of
+\textsc{DutchMerchant}, called \textsc{Restricted-DMP}. This instance is
+obtained by fixing or eliminating the following parameters and decisions from
+the original problem:
+
+\begin{enumerate} \item \textbf{Commodities}: We fix $|\mathcal{M}| = 1$. Only
+a single generic commodity exists. \item \textbf{Prices and Transactions}: We
+fix $c^{buy}_{v} = 0$ and $c^{sell}_{v} = p_v \geq 0$ for every port $v \in V
+\setminus \{v_0\}$. This implies that upon visiting $v$, a fixed net profit
+$p_v$ is obtained automatically, with no intermediate purchase decision or
+capacity consumption. \item \textbf{Capacity}: We fix $B = \infty$. Capacity
+ceases to be a constraint. \item \textbf{Financial Constraint}: The intermediate
+non-negative capital condition is removed. The capital is simply $r + \sum p_v -
+\sum c_{uv}$. \item \textbf{Time}: We fix $T_{max} = \infty$ or to a value
+sufficiently large to not restrict any possible tour. The edge costs $c_{uv}$
+represent capital *penalties* for travel. \end{enumerate}
+
+Therefore, an instance of \textsc{Restricted-DMP} is defined simply by $(G, v_0,
+\{p_v\}_{v \in V}, \{c_{e}\}_{e \in E})$, and its objective is to find a cycle
+starting and ending at $v_0$, visiting a subset $S \subseteq V \setminus
+\{v_0\}$, that maximizes $\sum_{v \in S} p_v - \sum_{e \in \text{tour}} c_{e}$.
+
+\subsection{Polynomial-Time Reduction from \textsc{Prize-Collecting TSP}}
+\label{subsec:reduction_pctsp}
+
+\subsubsection*{Definition of PCTSP} An instance of the
+\textsc{PrizeCollectingTSP} (PCTSP) problem is given by $(H, s, \{\pi_u\}_{u \in U}, \{\omega_{ij}\}_{(i,j) \in F})$, where $H=(U, F)$ is a complete graph, $s
+\in U$ is the root node, $\pi_u \geq 0$ is the prize for visiting node $u$, and
+$\omega_{ij} \geq 0$ is the cost of traversing edge $(i,j)$. The goal is to find
+a cycle that starts and ends at $s$, visits a subset of nodes, and maximizes the
+sum of collected prizes minus the sum of traversal costs.
+
+\textbf{Theorem 1 (NP-Hardness of PCTSP)}: \textsc{PrizeCollectingTSP} is NP-hard. This follows directly from it being a generalization of the classic \textsc{TravelingSalesmanProblem} (TSP, NP-hard) where the prizes for all nodes except $s$ are greater than the maximum possible sum of travel costs. Furthermore, the NP-hardness of this problem is well-established in the literature, as documented in studies on prize-collecting routing problems \cite{MarchettiSpaccamela2007PrizeCollectingTS}.
+
+\subsubsection*{Construction of the Reduction} Given an arbitrary instance
+$I_{P} = (H, s, \{\pi_u\}, \{\omega_{ij}\})$ of PCTSP, we construct an instance
+$I_{C} = (G, v_0, \{p_v\}, \{c_{e}\})$ of \textsc{Restricted-DMP} in polynomial
+time as follows: \begin{enumerate} \item For each node $u \in U$ in $H$, we
+create a corresponding port $v \in V$ in $G$. The root node $s$ is mapped to the
+origin port $v_0$. \item The graph $G$ is complete. For each edge $(i,j)$ in $H$
+with cost $\omega_{ij}$, we define the travel/operational cost in $G$ as $c_{v_i
+v_j} = \omega_{ij}$. \item For each port $v$ corresponding to a node $u \neq s$,
+we define the fixed profit $p_v = \pi_u$. \end{enumerate} This construction runs
+in $O(|U|^2)$ time.
+
+\subsubsection*{Solution Equivalence and Optimality} There exists a bijective
+correspondence between feasible tours of $I_P$ and $I_C$ that preserves the
+objective function. Given a tour $T_P = (s, u_{i_1}, ..., u_{i_m}, s)$ for $I_P$
+with value $\sum \pi_{u_{i_k}} - \sum \omega_{tour}$, the corresponding tour
+$T_C = (v_0, v_{i_1}, ..., v_{i_m}, v_0)$ in $I_C$ yields a final capital of $r
++ \sum p_{v_{i_k}} - \sum c_{tour}$. Since $r$ is constant, maximizing final
+capital in $I_C$ is equivalent to maximizing $\sum p_{v_{i_k}} - \sum c_{tour}$,
+which is identical to the objective of $I_P$. The inverse argument is analogous.
+
+\textbf{Lemma 1}: There exists a tour in $I_P$ with value $\geq K$ if and only
+if there exists a tour in $I_C$ with final capital $\geq r + K$.
+
+\subsubsection*{Reduction Conclusion} Since PCTSP is NP-hard (Theorem 1) and we
+have constructed a polynomial-time, optimality-preserving reduction from PCTSP
+to \textsc{Restricted-DMP}, we conclude:
+
+\textbf{Theorem 2}: \textsc{Restricted-DMP} is NP-hard.
+
+\subsection{Complexity Preservation Upon Reintroducing Constraints}
+\label{subsec:complexity_preservation}
+
+Theorem 2 demonstrates the NP-hardness of a simplified version ($\Pi_{restr}$)
+of our original problem ($\Pi_{orig}$). To definitively conclude that
+$\Pi_{orig}$ is NP-hard, we must analyze why reintroducing each eliminated
+constraint does not transform the problem into an easier one (in P). We
+demonstrate that, for each constraint, $\Pi_{restr}$ is a \textbf{special case}
+of $\Pi_{orig}$ under a specific configuration; therefore, $\Pi_{orig}$ is at
+least as hard.
+
+Let $\Pi_{orig}(X, Y, Z, ...)$ be the general problem with constraints $X, Y, Z,
+...$, and $\Pi_{restr}$ the problem without them. If $\Pi_{restr}$ is NP-hard,
+and there exists an assignment of values for $X, Y, Z, ...$ such that
+$\Pi_{orig}(val_X, val_Y, val_Z, ...) \equiv \Pi_{restr}$, then $\Pi_{orig}$ is
+NP-hard.
+
+\begin{enumerate} \item \textbf{Multiple Commodities ($|\mathcal{M}| \geq 1$)}.
+In $\Pi_{restr}$, $|\mathcal{M}|=1$. Consider an instance of $\Pi_{orig}$ with
+$|\mathcal{M}|=k>1$ where: i) the purchase prices for commodities $2, ..., k$
+are higher than any possible profit, making them non-profitable; ii) the sale
+price of commodity 1 is identical to $p_v$; and iii) capacity is sufficient to
+carry only commodity 1. Any optimal solution will ignore commodities $2, ..., k$
+and behave as in $\Pi_{restr}$. Thus, $\Pi_{restr}$ is a special case of
+$\Pi_{orig}$ with multiple commodities, which does not reduce complexity.
+
+\item \textbf{Finite Cargo Capacity ($B \in \mathbb{N}$)}. In $\Pi_{restr}$,
+$B = \infty$. Setting $B$ to a sufficiently large value (e.g., $B \geq \sum_{v
+\in V} 1$) in $\Pi_{orig}$ replicates the unlimited capacity condition, as the
+limit will never be reached with a single unit-profit commodity. Reducing $B$
+restricts the solution space, adding a dimension of difficulty equivalent to the
+Knapsack problem, which is NP-hard. Adding an NP-hard constraint cannot simplify
+a problem already proven NP-hard.
+
+\item \textbf{Intermediate Financial Constraint (Non-Negative Capital)}. In
+$\Pi_{restr}$ this constraint is omitted. In $\Pi_{orig}$, if the initial
+capital $r$ is greater than the maximum possible sum of travel costs, the
+constraint never activates, replicating $\Pi_{restr}$. Reducing $r$ introduces a
+dynamic financial state that must be verified at each port, increasing the
+complexity of the state space, not reducing it.
+
+\item \textbf{Strict Time Limit ($T_{max} \in \mathbb{R}^+$)}. In
+$\Pi_{restr}$, $T_{max} = \infty$. Setting $T_{max}$ larger than the duration of
+the longest possible tour in $\Pi_{orig}$ renders the constraint inactive,
+replicating $\Pi_{restr}$. Imposing a strict time limit transforms the problem
+into a variant of the "Orienteering Problem" (also NP-hard), adding an
+additional layer of difficulty.
+
+\item \textbf{Complex Buy/Sell Decisions}. In $\Pi_{restr}$, profit is
+automatic ($c^{buy}_v = 0, c^{sell}_v = p_v$). In $\Pi_{orig}$, fixing prices
+identically and defining that profit is obtained upon port arrival (without
+capacity consumption) simulates $\Pi_{restr}$. Allowing variable prices and
+strategic decisions introduces an arbitrage and inventory management problem,
+which is a strict and more difficult generalization. \end{enumerate}
+
+\textbf{Analysis Conclusion}: For each constraint $R_i$, there exists a
+configuration of $\Pi_{orig}$ that makes it equivalent to $\Pi_{restr}$. Any
+adjustment that genuinely activates $R_i$ (e.g., reducing $B$, reducing
+$T_{max}$) \textbf{restricts} the feasible solution space and/or adds an NP-hard
+optimization dimension. Therefore, $\Pi_{orig}$ is no simpler than $\Pi_{restr}$;
+it is a generalization that preserves and potentially increases complexity.
+
+\textbf{Theorem 3 (NP-Hardness of the General Problem)}: The
+\textsc{DutchMerchant} problem ($\Pi_{orig}$) is NP-hard. \textbf{Proof}: Direct
+from Theorem 2 and the above analysis, which establishes that $\Pi_{restr}$ is a
+special case of $\Pi_{orig}$. \hfill $\square$
+
+\subsection{Proof of Membership in NP} \label{subsec:membership_np}
+
+To establish that \textsc{DutchMerchant} is NP-Complete, in addition to being
+NP-hard (Theorem 3), we must prove it belongs to the class NP. That is, given a
+proposed solution to the problem, we can verify its feasibility and compute its
+objective value (the final capital) in \textbf{polynomial time} relative to the
+input size.
+
+\subsubsection*{Certificate and Verifier} A certificate $C$ for an instance of
+$\Pi_{orig}$ must include: \begin{enumerate} \item A sequence of ports (a tour)
+$T = (v_0, v_{i_1}, v_{i_2}, ..., v_{i_m}, v_0)$. \item For each visited port
+$v_{i_j}$, a list of buy and sell operations per commodity type. \end{enumerate}
+
+The size of this certificate is polynomially bounded: the tour has at most
+$|V|$ nodes, and operations at each port are for $|\mathcal{M}|$ commodities.
+
+A verifier algorithm $V(I, C)$ must check the following points in polynomial
+time: \begin{enumerate} \item \textbf{Tour Validity}: Verify $T$ is a cycle
+starting and ending at $v_0$ and that no internal port is repeated. This takes
+$O(|V|)$. \item \textbf{Capacity Compliance}: For each leg between ports,
+calculate the total onboard load by summing purchases and subtracting sales.
+Verify it never exceeds $B$. This requires traversing the operation sequence
+once: $O(m \cdot |\mathcal{M}|)$. \item \textbf{Financial Constraint Compliance}:
+Simulate the cash flow. Starting from $r$, for each port: subtract travel costs,
+add sale profits, subtract purchase costs, and verify non-negative capital.
+Also $O(m \cdot |\mathcal{M}|)$. \item \textbf{Time Limit Compliance}: Sum
+travel times $t_{uv}$ for all edges in $T$ and port operation times. Verify the
+total does not exceed $T_{max}$. $O(m)$. \item \textbf{Objective Calculation}:
+The certificate's value is the final capital after the last operation, obtained
+as the output of step 3. \end{enumerate}
+
+Each operation is an addition, subtraction, or comparison executed a number of
+times proportional to the certificate size. Therefore, total verification time
+is polynomial in the input size $I$ (which includes $|V|$, $|E|$,
+$|\mathcal{M}|$).
+
+\textbf{Lemma 3 (Membership in NP)}: There exists a verifier $V(I, C)$ that
+decides in polynomial time whether a certificate $C$ is a feasible solution for
+$\Pi_{orig}$ and what its value is. Therefore, $\Pi_{orig} \in \text{NP}$.
+
+\subsubsection*{NP-Completeness Conclusion} Combining the NP-hardness result
+(Theorem 3) with NP membership (Lemma 3), we establish the final classification.
+
+\textbf{Theorem 4 (NP-Completeness)}: The decision problem associated with
+\textsc{DutchMerchant} is NP-Complete. \textbf{Proof}: The decision problem asks:
+"Does there exist a route and transaction plan with final capital $\geq K$?".
+By Lemma 3, this problem is in NP. By Theorem 3, it is NP-hard. Consequently, it
+is NP-Complete. \hfill $\square$
+
+This classification formally justifies the use of non-exact algorithmic
+techniques (heuristics, approximations) in the project's subsequent phases.
+
+\section{Conclusions} \label{sec:conclusions}
+
+This work presents a formal analysis of the computational complexity of the
+Dutch Merchant Problem. The main results are: \begin{itemize} \item A restricted
+version of the problem (\textsc{Restricted-DMP}) was defined and proven NP-hard
+via a polynomial-time reduction from the Prize-Collecting TSP (Theorem 2). \item
+It was rigorously argued, constraint by constraint, that the NP-hard complexity
+is preserved when reintroducing all features of the general problem (Theorem 3).
+\item It was demonstrated that the associated decision problem belongs to the
+class NP, by presenting a polynomial-time verifiable certificate (Lemma 3 and
+Theorem 4). \end{itemize} Therefore, we conclude that the \textbf{Dutch Merchant
+decision problem is NP-Complete}. This finding provides the theoretical
+justification for the project's practical approach, which in the following
+phases will focus on the design, implementation, and empirical evaluation of
+approximation algorithms and heuristics to tackle realistic problem instances.
+
+\bibliographystyle{plain} \bibliography{referencias}
+
+\end{document}
