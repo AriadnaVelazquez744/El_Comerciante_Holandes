@@ -38,7 +38,7 @@ This document presents the design, implementation, and analysis of a two-phase h
 
 This document presents an efficient algorithm for solving the Dutch Merchant Problem, designed to handle instances with $15 \leq n \leq 30$ ports, where $n$ represents the total number of ports including Amsterdam. The problem extends the basic formulation to support multiple item types per port ($m$ items) and operations that allow buying or selling $k$ units per transaction, significantly increasing the complexity compared to the single-item, single-unit case.
 
-The Dutch Merchant Problem, as formalized in the reduction analysis \cite{reduccion2025}, is an NP-Complete optimization problem that combines routing decisions with transaction optimization under multiple constraints: capacity limits, capital requirements, and time restrictions. The problem's relationship to the Prize-Collecting Traveling Salesman Problem (PCTSP) \cite{MarchettiSpaccamela2007PrizeCollectingTS} provides a natural framework for route generation, while the transaction optimization subproblem exhibits optimal substructure suitable for dynamic programming techniques.
+The Dutch Merchant Problem, as formalized in the reduction analysis \cite{reduction2025}, is an NP-Complete optimization problem that combines routing decisions with transaction optimization under multiple constraints: capacity limits, capital requirements, and time restrictions. The problem's relationship to the Prize-Collecting Traveling Salesman Problem (PCTSP) \cite{MarchettiSpaccamela2007PrizeCollectingTS} provides a natural framework for route generation, while the transaction optimization subproblem exhibits optimal substructure suitable for dynamic programming techniques.
 
 \section{Problem Formalization}
 \label{sec:formalization}
@@ -99,7 +99,7 @@ $$\max \left\{ r + \sum_{\text{sales}} c_{v,m}^{venta} \cdot \text{units\_sold} 
 The problem exhibits two primary sources of complexity:
 
 \begin{enumerate}
-    \item \textbf{Route Selection}: The number of possible routes is $O(n!)$ when considering all permutations of port subsets. This is NP-hard, as established by the reduction from Prize-Collecting TSP \cite{reduccion2025}.
+    \item \textbf{Route Selection}: The number of possible routes is $O(n!)$ when considering all permutations of port subsets. This is NP-hard, as established by the reduction from Prize-Collecting TSP \cite{reduction2025}.
     \item \textbf{Transaction Optimization}: For a fixed route of length $L$ visiting $L$ intermediate ports, with $m$ item types and operations involving up to $k$ units, the decision space is $O((k+1)^{m \cdot L})$. Without structure exploitation, this grows exponentially.
 \end{enumerate}
 
@@ -117,7 +117,7 @@ The two-phase hybrid approach separates these two sources of complexity, applyin
 
 \subsection{Connection to Prize-Collecting TSP}
 
-The reduction analysis \cite{reduccion2025} establishes that the Dutch Merchant Problem is NP-hard via reduction from Prize-Collecting TSP. This connection provides a natural framework for route generation:
+The reduction analysis \cite{reduction2025} establishes that the Dutch Merchant Problem is NP-hard via reduction from Prize-Collecting TSP. This connection provides a natural framework for route generation:
 
 \begin{itemize}
     \item \textbf{PCTSP Structure}: In PCTSP, we seek a cycle starting at root $s$ that visits a subset of nodes to maximize $\sum_{u \in S} \pi_u - \sum_{e \in \text{tour}} \omega_e$, where $\pi_u$ is the prize for visiting node $u$ and $\omega_e$ is the edge cost.
@@ -575,7 +575,7 @@ The experimental evidence indicates that the two-phase hybrid algorithm exhibits
 
 \subsection{Theoretical and Practical Contributions}
 
-From a theoretical standpoint, this work illustrates how the NP-hard Dutch Merchant Problem \cite{reduccion2025} can be attacked effectively by separating the route selection and transaction optimization components and combining PCTSP-inspired bounds with multi-dimensional dynamic programming. From a practical standpoint, the implementation demonstrates that this hybrid approach can handle realistic instance sizes with multiple items and $k$-unit operations, while remaining flexible enough to accommodate alternative route heuristics and DP variants.
+From a theoretical standpoint, this work illustrates how the NP-hard Dutch Merchant Problem \cite{reduction2025} can be attacked effectively by separating the route selection and transaction optimization components and combining PCTSP-inspired bounds with multi-dimensional dynamic programming. From a practical standpoint, the implementation demonstrates that this hybrid approach can handle realistic instance sizes with multiple items and $k$-unit operations, while remaining flexible enough to accommodate alternative route heuristics and DP variants.
 
 \subsection{Future Work}
 
