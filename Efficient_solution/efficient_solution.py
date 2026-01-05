@@ -90,23 +90,35 @@ def calculate_pctsp_bound(route: List[int], instance: Dict) -> float:
     This bound estimates maximum achievable profit by:
     - Summing maximum possible profit per port (prize)
     - Subtracting travel costs
+    - Accounting for capital constraints (can't buy if insufficient capital)
     
     Args:
         route: List of port indices [v0, v1, ..., vL, v0]
         instance: Problem instance dictionary
         
     Returns:
-        Upper bound on achievable profit
+        Upper bound on achievable profit (not including initial capital)
     """
     purchase_prices = instance['purchase_prices']
     sale_prices = instance['sale_prices']
     travel_costs = instance['travel_costs']
     capacity = instance['capacity']
-    max_units_per_op = instance.get('max_units_per_op', 1)
+    initial_capital = instance['initial_capital']
+    max_units_per_op = instance.get('max_units_per_op', capacity)
     
     total_prize = 0.0
     total_cost = 0.0
+    current_capital = initial_capital
     
+    # Handle empty route [0, 0] - no travel, no profit
+    if len(route) <= 2 and route[0] == 0 and route[-1] == 0:
+        return 0.0
+    
+    # Calculate total travel cost first
+    for i in range(len(route) - 1):
+        total_cost += travel_costs[route[i]][route[i + 1]]
+    
+    # Simulate capital flow to get more accurate bound
     # Calculate prize (maximum profit) for each port in route
     for i in range(1, len(route) - 1):  # Skip start and end (Amsterdam)
         port = route[i]
@@ -119,19 +131,22 @@ def calculate_pctsp_bound(route: List[int], instance: Dict) -> float:
             if profit_per_unit > 0:
                 # Maximum units we could profitably trade (limited by capacity and k)
                 max_units = min(max_units_per_op, capacity)
-                max_profit_per_port = max(max_profit_per_port, profit_per_unit * max_units)
+                # Check if we have enough capital to buy
+                purchase_cost = purchase_prices[port][item_idx] * max_units
+                if current_capital >= purchase_cost:
+                    profit = profit_per_unit * max_units
+                    max_profit_per_port = max(max_profit_per_port, profit)
         
         total_prize += max_profit_per_port
-    
-    # Calculate total travel cost
-    for i in range(len(route) - 1):
-        total_cost += travel_costs[route[i]][route[i + 1]]
+        # Update capital (optimistic: assume we make profit)
+        current_capital += max_profit_per_port
     
     return total_prize - total_cost
 
 
 def generate_promising_routes(instance: Dict, beam_width: int = 100, 
-                             max_depth: Optional[int] = None, timeout: float = 300.0) -> List[Tuple[List[int], float]]:
+                             max_depth: Optional[int] = None, timeout: float = 300.0,
+                             adaptive_beam: bool = True) -> List[Tuple[List[int], float]]:
     """
     Generate promising routes using beam search with PCTSP-style bounds.
     
@@ -140,6 +155,7 @@ def generate_promising_routes(instance: Dict, beam_width: int = 100,
         beam_width: Number of routes to keep in beam at each depth
         max_depth: Maximum route length (None = no limit, but limited by n)
         timeout: Maximum time to spend on route generation
+        adaptive_beam: If True, increase beam width for small instances
         
     Returns:
         List of (route, bound) tuples, sorted by bound (descending)
@@ -151,17 +167,44 @@ def generate_promising_routes(instance: Dict, beam_width: int = 100,
     travel_costs = instance['travel_costs']
     travel_times = instance['travel_times']
     T_max = instance['max_time']
+    initial_capital = instance['initial_capital']
+    
+    # Adaptive beam width: increase for small instances to find better solutions
+    if adaptive_beam and n <= 8:
+        beam_width = max(beam_width, n * 20)  # More routes for small instances
     
     if max_depth is None:
         max_depth = n - 1  # Can visit at most n-1 ports (excluding Amsterdam)
     
+    # Handle edge case: n=1 (only Amsterdam, no other ports)
+    if n == 1:
+        # Only route is [0, 0] - stay at Amsterdam
+        route_00 = [0, 0]
+        profit_bound = calculate_pctsp_bound(route_00, instance)
+        final_bound = initial_capital + profit_bound
+        return [(route_00, final_bound)]
+    
     # Beam: list of (route, bound, time_used, visited_set)
     # Start with just Amsterdam
-    beam = [([0], 0.0, 0.0, {0})]
+    beam = [([0], initial_capital, 0.0, {0})]  # Bound includes initial capital
     final_routes = []  # Complete routes ending at Amsterdam
+    # Initialize best_known_bound to allow all routes initially (very permissive)
     best_known_bound = float('-inf')
     
-    threshold = 0.0  # Pruning threshold (can be adjusted)
+    # Adaptive threshold: be less aggressive for small instances
+    # Positive threshold means we allow routes with bound up to threshold less than best
+    if n <= 8:
+        threshold = 50.0  # Allow routes with bound up to 50 less than best
+    else:
+        threshold = 0.0
+    
+    # Also consider the empty route (just return to Amsterdam immediately)
+    # This handles cases where no profitable routes exist
+    empty_route = [0, 0]
+    empty_profit_bound = calculate_pctsp_bound(empty_route, instance)
+    empty_bound = initial_capital + empty_profit_bound
+    final_routes.append((empty_route, empty_bound))
+    best_known_bound = max(best_known_bound, empty_bound)
     
     for depth in range(1, max_depth + 1):
         if time.time() - start_time > timeout:
@@ -187,10 +230,13 @@ def generate_promising_routes(instance: Dict, beam_width: int = 100,
                     continue
                 
                 new_route = route + [next_port]
-                bound = calculate_pctsp_bound(new_route + [0], instance)
+                profit_bound = calculate_pctsp_bound(new_route + [0], instance)
+                # Bound is profit, convert to capital (initial + profit)
+                bound = initial_capital + profit_bound
                 
                 # Pruning: only keep if bound is promising
-                if bound > best_known_bound - threshold:
+                # For small instances, be less aggressive (allow routes with lower bounds)
+                if bound >= best_known_bound - threshold:
                     candidates.append((new_route, bound, new_time, visited | {next_port}))
             
             # Also consider completing route back to Amsterdam
@@ -200,12 +246,16 @@ def generate_promising_routes(instance: Dict, beam_width: int = 100,
                 
                 if final_time <= T_max:
                     complete_route = route + [0]
-                    final_bound = calculate_pctsp_bound(complete_route, instance)
+                    profit_bound = calculate_pctsp_bound(complete_route, instance)
+                    # Convert profit bound to capital bound
+                    final_bound = initial_capital + profit_bound
                     final_routes.append((complete_route, final_bound))
         
-        # Update best known bound
+        # Update best known bound from both candidates and final routes
         if candidates:
             best_known_bound = max(best_known_bound, max(c[1] for c in candidates))
+        if final_routes:
+            best_known_bound = max(best_known_bound, max(r[1] for r in final_routes))
         
         # Keep top K candidates by bound
         candidates.sort(key=lambda x: x[1], reverse=True)
@@ -216,6 +266,13 @@ def generate_promising_routes(instance: Dict, beam_width: int = 100,
     
     # Sort final routes by bound (descending)
     final_routes.sort(key=lambda x: x[1], reverse=True)
+    
+    # Ensure we return at least the empty route if no other routes were found
+    if not final_routes:
+        empty_route = [0, 0]
+        empty_profit_bound = calculate_pctsp_bound(empty_route, instance)
+        empty_bound = initial_capital + empty_profit_bound
+        final_routes.append((empty_route, empty_bound))
     
     return final_routes
 
@@ -242,7 +299,8 @@ def solve_transactions_dp(route: List[int], instance: Dict) -> Tuple[Optional[fl
     travel_times = instance['travel_times']
     initial_capital = instance['initial_capital']
     capacity = instance['capacity']
-    max_units_per_op = instance.get('max_units_per_op', 1)
+    # Default k = capacity if not specified
+    max_units_per_op = instance.get('max_units_per_op', capacity)
     T_max = instance['max_time']
     
     # Determine number of item types from first port
@@ -252,15 +310,20 @@ def solve_transactions_dp(route: List[int], instance: Dict) -> Tuple[Optional[fl
     if num_items == 0:
         return None, None
     
-    # Check time feasibility
-    total_time = sum(travel_times[route[i]][route[i+1]] for i in range(len(route) - 1))
-    if total_time > T_max:
+    # Check time feasibility (travel time only - operations will be tracked in DP)
+    total_travel_time = sum(travel_times[route[i]][route[i+1]] for i in range(len(route) - 1))
+    if total_travel_time > T_max:
         return None, None
     
-    # State: (port_index, capital, load_vector)
-    # Use sparse representation: dp[port_idx][capital_band][load_tuple] = best_capital
+    # State: (port_index, capital, load_vector, time_used)
+    # Use sparse representation: dp[port_idx][(capital_band, load_tuple, time_used)] = best_capital
     # For efficiency, we discretize capital into bands
-    capital_band_width = max(1.0, initial_capital / 100.0)  # Adaptive discretization
+    # For small instances, use exact capital to avoid precision loss
+    n = len(instance['ports'])
+    if n <= 8 and num_items == 1:
+        capital_band_width = 0.01  # Very fine discretization for small instances
+    else:
+        capital_band_width = max(1.0, initial_capital / 100.0)  # Adaptive discretization
     
     def get_capital_band(capital: float) -> int:
         """Convert capital to band index"""
@@ -282,9 +345,11 @@ def solve_transactions_dp(route: List[int], instance: Dict) -> Tuple[Optional[fl
     dp = [defaultdict(lambda: (float('-inf'), None, None)) for _ in range(L + 1)]
     
     # Initialize state at first port
+    # State includes: (capital_band, load_tuple, time_used)
     initial_load = tuple([0] * num_items)
     initial_band = get_capital_band(capital_after_travel)
-    dp[0][(initial_band, initial_load)] = (capital_after_travel, None, None)
+    initial_time = travel_times[0][first_port]  # Time to travel to first port
+    dp[0][(initial_band, initial_load, initial_time)] = (capital_after_travel, None, None)
     
     # Process each port
     for i in range(L):
@@ -292,11 +357,15 @@ def solve_transactions_dp(route: List[int], instance: Dict) -> Tuple[Optional[fl
         dp_next = defaultdict(lambda: (float('-inf'), None, None))
         
         # Process each state at current port
-        for (cap_band, load_vec), (best_cap, prev_state, prev_decision) in dp[i].items():
+        for (cap_band, load_vec, time_used), (best_cap, prev_state, prev_decision) in dp[i].items():
             if best_cap == float('-inf'):
                 continue
             
             capital = get_capital_from_band(cap_band)
+            
+            # Check if we've already exceeded time limit
+            if time_used > T_max:
+                continue
             
             # Generate all feasible actions
             # For simplicity, we process items sequentially (can be optimized for independence)
@@ -324,18 +393,50 @@ def solve_transactions_dp(route: List[int], instance: Dict) -> Tuple[Optional[fl
             
             # Apply each action and update dp_next
             for action in actions_to_consider:
+                item_idx, units = action
+                
+                # Pruning: Check constraints before applying transaction
+                if units > 0:  # Buying
+                    total_current_load = sum(load_vec)
+                    if total_current_load + units > capacity:
+                        continue  # Prune: would exceed capacity
+                    # Pruning: Check budget constraint
+                    price_per_unit = purchase_prices[port][item_idx]
+                    total_cost = price_per_unit * units
+                    if capital < total_cost:
+                        continue  # Prune: insufficient capital
+                
+                elif units < 0:  # Selling
+                    current_load = load_vec[item_idx]
+                    units_to_sell = abs(units)
+                    if current_load < units_to_sell:
+                        continue  # Prune: trying to sell more than available
+                
                 new_capital, new_load = apply_transaction(capital, load_vec, action, port, instance)
                 
+                # Additional feasibility check after transaction
                 if not is_feasible_state(new_capital, new_load, capacity, instance):
                     continue
                 
+                # Pruning: Reject if capital becomes negative
+                if new_capital < 0:
+                    continue
+                
+                # Track operation time: +1 for each buy/sell operation
+                operation_time = 1 if units != 0 else 0
+                new_time = time_used + operation_time
+                
+                # Pruning: Reject if exceeds time limit
+                if new_time > T_max:
+                    continue
+                
                 new_band = get_capital_band(new_capital)
-                new_state = (new_band, new_load)
+                new_state = (new_band, new_load, new_time)
                 
                 # Update if this is better
-                current_best, _, _ = dp_next[new_state]
+                current_best, _, _ = dp_next.get(new_state, (float('-inf'), None, None))
                 if new_capital > current_best:
-                    dp_next[new_state] = (new_capital, (cap_band, load_vec), (i, port, action))
+                    dp_next[new_state] = (new_capital, (cap_band, load_vec, time_used), (i, port, action))
         
         # Travel to next port
         if i < L - 1:
@@ -344,19 +445,27 @@ def solve_transactions_dp(route: List[int], instance: Dict) -> Tuple[Optional[fl
             next_port = 0  # Return to Amsterdam
         
         travel_cost = travel_costs[port][next_port]
+        travel_time_cost = travel_times[port][next_port]
         
         # Update dp[i+1] after travel
-        for (cap_band, load_vec), (best_cap, prev_state, prev_decision) in dp_next.items():
+        for (cap_band, load_vec, time_after_ops), (best_cap, prev_state, prev_decision) in dp_next.items():
             capital = get_capital_from_band(cap_band)
             new_capital = capital - travel_cost
             
             if new_capital < 0:
                 continue
             
-            new_band = get_capital_band(new_capital)
-            new_state = (new_band, load_vec)
+            # Add travel time
+            new_time = time_after_ops + travel_time_cost
             
-            current_best, _, _ = dp[i + 1][new_state]
+            # Pruning: Reject if exceeds time limit
+            if new_time > T_max:
+                continue
+            
+            new_band = get_capital_band(new_capital)
+            new_state = (new_band, load_vec, new_time)
+            
+            current_best, _, _ = dp[i + 1].get(new_state, (float('-inf'), None, None))
             if new_capital > current_best:
                 dp[i + 1][new_state] = (new_capital, prev_state, prev_decision)
     
@@ -370,6 +479,10 @@ def solve_transactions_dp(route: List[int], instance: Dict) -> Tuple[Optional[fl
             best_final_state = (state, prev_state, prev_decision)
     
     if best_final_capital == float('-inf'):
+        return None, None
+    
+    # Reject solutions with final capital less than initial capital (not valid)
+    if best_final_capital < initial_capital:
         return None, None
     
     # Reconstruct decisions by backtracking
@@ -421,7 +534,7 @@ def two_phase_hybrid_solve(instance: Dict, timeout: float = 300.0,
             - 'capacity': Maximum capacity
             - 'max_time': Maximum time
             - 'num_items': Number of item types (optional, inferred)
-            - 'max_units_per_op': Maximum units per operation (default: 1)
+            - 'max_units_per_op': Maximum units per operation (default: capacity)
         timeout: Maximum execution time in seconds
         beam_width: Beam width for route generation
         
@@ -451,36 +564,320 @@ def two_phase_hybrid_solve(instance: Dict, timeout: float = 300.0,
         'decisions': None
     }
     
-    # Phase 1: Generate promising routes
-    route_timeout = timeout * 0.3  # Use 30% of timeout for route generation
-    routes = generate_promising_routes(instance, beam_width=beam_width, 
-                                      timeout=route_timeout)
+    # Adaptive parameters based on instance size
+    n = len(instance['ports'])
+    initial_capital = instance['initial_capital']
+    
+    # For small instances, evaluate more routes
+    if n <= 8:
+        # Increase beam width significantly for small instances
+        adaptive_beam_width = max(beam_width, n * 30)
+        # Less aggressive pruning - evaluate routes even if bound is slightly lower
+        bound_tolerance = 20.0
+        max_routes_to_evaluate = min(100, 2 ** (n - 1))  # More routes for small n
+    else:
+        adaptive_beam_width = beam_width
+        bound_tolerance = 0.0
+        max_routes_to_evaluate = 200
+    
+    # Iterative route generation with DP feedback
+    # Round 1: Initial route generation
+    route_timeout = timeout * 0.3  # Use 30% of timeout for initial route generation
+    routes = generate_promising_routes(instance, beam_width=adaptive_beam_width, 
+                                      timeout=route_timeout, adaptive_beam=True)
     stats['routes_generated'] = len(routes)
     
-    # Phase 2: Solve transaction DP for each route
-    remaining_time = timeout - (time.time() - start_time)
+    # Track evaluated routes and their DP results for refinement
+    evaluated_routes = {}  # route_tuple -> (capital, decisions)
+    route_scores = []  # List of (route, capital) for sorting
     
+    # Phase 2: Solve transaction DP for each route (initial round)
+    routes_evaluated_count = 0
     for route, bound in routes:
         if time.time() - start_time > timeout:
             stats['timeout'] = True
             break
         
-        # Early pruning: if bound is worse than current best, skip
-        if bound < best_solution['capital']:
-            continue
+        # Adaptive pruning: for small instances, be less aggressive
+        # Compare bound (which now includes initial capital) to current best
+        # Only prune if we have a valid solution and bound is significantly worse
+        if best_solution['capital'] != float('-inf'):
+            if bound < best_solution['capital'] - bound_tolerance:
+                continue
         
+        # Limit number of routes evaluated for very large instances
+        if routes_evaluated_count >= max_routes_to_evaluate:
+            break
+        
+        routes_evaluated_count += 1
         stats['routes_evaluated'] += 1
         max_capital, decisions = solve_transactions_dp(route, instance)
         
-        if max_capital is not None and max_capital > best_solution['capital']:
-            best_solution['capital'] = max_capital
-            best_solution['route'] = route
-            best_solution['decisions'] = decisions
+        route_tuple = tuple(route)
+        evaluated_routes[route_tuple] = (max_capital, decisions)
+        
+        if max_capital is not None:
+            route_scores.append((route, max_capital))
+            if max_capital > best_solution['capital']:
+                best_solution['capital'] = max_capital
+                best_solution['route'] = route
+                best_solution['decisions'] = decisions
+    
+    # Round 2: Generate additional routes based on successful patterns
+    # If we have good solutions, try variations of successful routes
+    if route_scores and time.time() - start_time < timeout * 0.8:
+        # Sort routes by capital (descending)
+        route_scores.sort(key=lambda x: x[1], reverse=True)
+        
+        # Take top routes and generate neighbors (add/remove one port)
+        top_routes = route_scores[:min(5, len(route_scores))]
+        additional_routes = []
+        
+        for route, capital in top_routes:
+            if time.time() - start_time > timeout * 0.8:
+                break
+            
+            # Try adding one unvisited port to successful routes
+            visited_ports = set(route[1:-1])  # Exclude start and end (Amsterdam)
+            n = len(instance['ports'])
+            
+            for new_port in range(1, n):
+                if new_port in visited_ports:
+                    continue
+                
+                # Try inserting at different positions
+                for insert_pos in range(1, len(route)):
+                    new_route = route[:insert_pos] + [new_port] + route[insert_pos:-1] + [0]
+                    route_tuple = tuple(new_route)
+                    
+                    # Skip if already evaluated
+                    if route_tuple in evaluated_routes:
+                        continue
+                    
+                    # Check time feasibility quickly
+                    total_time = sum(instance['travel_times'][new_route[i]][new_route[i+1]] 
+                                   for i in range(len(new_route) - 1))
+                    if total_time <= instance['max_time']:
+                        profit_bound = calculate_pctsp_bound(new_route, instance)
+                        bound = initial_capital + profit_bound
+                        # Use adaptive tolerance
+                        if bound > best_solution['capital'] - bound_tolerance:
+                            additional_routes.append((new_route, bound))
+            
+            # Try removing one port from successful routes (if route has more than 1 port)
+            if len(route) > 3:  # More than just [0, port, 0]
+                for remove_pos in range(1, len(route) - 1):
+                    new_route = route[:remove_pos] + route[remove_pos+1:]
+                    route_tuple = tuple(new_route)
+                    
+                    if route_tuple in evaluated_routes:
+                        continue
+                    
+                    total_time = sum(instance['travel_times'][new_route[i]][new_route[i+1]] 
+                                   for i in range(len(new_route) - 1))
+                    if total_time <= instance['max_time']:
+                        profit_bound = calculate_pctsp_bound(new_route, instance)
+                        bound = initial_capital + profit_bound
+                        if bound > best_solution['capital'] - bound_tolerance:
+                            additional_routes.append((new_route, bound))
+        
+        # Sort additional routes by bound
+        additional_routes.sort(key=lambda x: x[1], reverse=True)
+        stats['routes_generated'] += len(additional_routes)
+        
+        # Evaluate additional routes
+        for route, bound in additional_routes:
+            if time.time() - start_time > timeout:
+                stats['timeout'] = True
+                break
+            
+            if bound < best_solution['capital']:
+                continue
+            
+            route_tuple = tuple(route)
+            if route_tuple in evaluated_routes:
+                continue
+            
+            stats['routes_evaluated'] += 1
+            max_capital, decisions = solve_transactions_dp(route, instance)
+            
+            evaluated_routes[route_tuple] = (max_capital, decisions)
+            
+            if max_capital is not None:
+                if max_capital > best_solution['capital']:
+                    best_solution['capital'] = max_capital
+                    best_solution['route'] = route
+                    best_solution['decisions'] = decisions
+    
+    # Round 3: For small instances, generate more routes using DP-informed heuristics
+    # Use actual DP results to identify promising port patterns
+    if n <= 8 and route_scores and time.time() - start_time < timeout * 0.9:
+        # Identify most profitable ports from successful routes
+        port_profits = {}  # port -> list of profits achieved
+        for route, capital in route_scores[:min(10, len(route_scores))]:
+            for port in route[1:-1]:  # Exclude Amsterdam
+                if port not in port_profits:
+                    port_profits[port] = []
+                port_profits[port].append(capital)
+        
+        # Calculate average profit per port
+        port_avg_profit = {p: sum(profits) / len(profits) 
+                          for p, profits in port_profits.items()}
+        
+        # Generate routes prioritizing high-profit ports
+        if port_avg_profit:
+            sorted_ports = sorted(port_avg_profit.items(), key=lambda x: x[1], reverse=True)
+            top_ports = [p for p, _ in sorted_ports[:min(n-1, 5)]]
+            
+            # Generate routes visiting top profitable ports
+            import itertools
+            for k in range(1, min(len(top_ports) + 1, 4)):  # Up to 3 ports
+                if time.time() - start_time > timeout * 0.9:
+                    break
+                for subset in itertools.combinations(top_ports, k):
+                    for perm in itertools.permutations(subset):
+                        new_route = [0] + list(perm) + [0]
+                        route_tuple = tuple(new_route)
+                        
+                        if route_tuple in evaluated_routes:
+                            continue
+                        
+                        # Check time feasibility
+                        total_time = sum(instance['travel_times'][new_route[i]][new_route[i+1]] 
+                                       for i in range(len(new_route) - 1))
+                        if total_time <= instance['max_time']:
+                            profit_bound = calculate_pctsp_bound(new_route, instance)
+                            bound = initial_capital + profit_bound
+                            if bound > best_solution['capital'] - bound_tolerance:
+                                if routes_evaluated_count >= max_routes_to_evaluate:
+                                    break
+                                
+                                routes_evaluated_count += 1
+                                stats['routes_evaluated'] += 1
+                                max_capital, decisions = solve_transactions_dp(new_route, instance)
+                                
+                                evaluated_routes[route_tuple] = (max_capital, decisions)
+                                
+                                if max_capital is not None:
+                                    if max_capital > best_solution['capital']:
+                                        best_solution['capital'] = max_capital
+                                        best_solution['route'] = new_route
+                                        best_solution['decisions'] = decisions
+    
+    # Safety check: If no valid solution found (all routes resulted in capital < initial),
+    # generate more routes using a different strategy
+    final_capital = best_solution['capital'] if best_solution['capital'] != float('-inf') else None
+    no_valid_solution = (final_capital is None or final_capital < instance['initial_capital'])
+    
+    if no_valid_solution and time.time() - start_time < timeout * 0.95:
+        # Generate additional routes using exhaustive or relaxed strategy
+        # This safety mechanism ensures we explore more possibilities when
+        # all previously evaluated routes resulted in invalid solutions
+        
+        if n <= 8:
+            # For small instances, generate routes exhaustively
+            import itertools
+            emergency_routes = []
+            
+            # Generate all possible route combinations
+            ports_to_visit = list(range(1, n))  # All ports except Amsterdam
+            
+            for route_length in range(1, min(n, 5) + 1):  # Up to 5 ports
+                if time.time() - start_time > timeout * 0.95:
+                    break
+                    
+                for subset in itertools.combinations(ports_to_visit, route_length):
+                    for perm in itertools.permutations(subset):
+                        new_route = [0] + list(perm) + [0]
+                        route_tuple = tuple(new_route)
+                        
+                        # Skip if already evaluated
+                        if route_tuple in evaluated_routes:
+                            continue
+                        
+                        # Check time feasibility
+                        total_time = sum(instance['travel_times'][new_route[i]][new_route[i+1]] 
+                                       for i in range(len(new_route) - 1))
+                        if total_time <= instance['max_time']:
+                            profit_bound = calculate_pctsp_bound(new_route, instance)
+                            bound = initial_capital + profit_bound
+                            emergency_routes.append((new_route, bound))
+            
+            # Sort by bound and evaluate
+            emergency_routes.sort(key=lambda x: x[1], reverse=True)
+            stats['routes_generated'] += len(emergency_routes)
+            
+            for route, bound in emergency_routes[:min(200, len(emergency_routes))]:
+                if time.time() - start_time > timeout * 0.95:
+                    break
+                
+                route_tuple = tuple(route)
+                if route_tuple in evaluated_routes:
+                    continue
+                
+                stats['routes_evaluated'] += 1
+                max_capital, decisions = solve_transactions_dp(route, instance)
+                
+                evaluated_routes[route_tuple] = (max_capital, decisions)
+                
+                if max_capital is not None and max_capital >= instance['initial_capital']:
+                    if max_capital > best_solution['capital']:
+                        best_solution['capital'] = max_capital
+                        best_solution['route'] = route
+                        best_solution['decisions'] = decisions
+                        final_capital = max_capital
+                        no_valid_solution = False
+                        # Continue searching for better solutions, but we found at least one valid
+        
+        else:
+            # For larger instances, use relaxed beam search with much larger beam width
+            relaxed_beam_width = beam_width * 5  # Much larger beam
+            relaxed_timeout = min(timeout * 0.1, timeout - (time.time() - start_time))
+            
+            if relaxed_timeout > 1.0:  # Only if we have enough time
+                relaxed_routes = generate_promising_routes(
+                    instance, 
+                    beam_width=relaxed_beam_width, 
+                    timeout=relaxed_timeout,
+                    adaptive_beam=False  # Don't further increase
+                )
+                
+                stats['routes_generated'] += len(relaxed_routes)
+                
+                # Evaluate relaxed routes with no pruning
+                for route, bound in relaxed_routes:
+                    if time.time() - start_time > timeout * 0.95:
+                        break
+                    
+                    route_tuple = tuple(route)
+                    if route_tuple in evaluated_routes:
+                        continue
+                    
+                    stats['routes_evaluated'] += 1
+                    max_capital, decisions = solve_transactions_dp(route, instance)
+                    
+                    evaluated_routes[route_tuple] = (max_capital, decisions)
+                    
+                    if max_capital is not None and max_capital >= instance['initial_capital']:
+                        if max_capital > best_solution['capital']:
+                            best_solution['capital'] = max_capital
+                            best_solution['route'] = route
+                            best_solution['decisions'] = decisions
+                            final_capital = max_capital
+                            no_valid_solution = False
+                            # Continue searching for better solutions
     
     execution_time = time.time() - start_time
     
+    # Final validation: reject if capital is less than initial capital
+    final_capital = best_solution['capital'] if best_solution['capital'] != float('-inf') else None
+    if final_capital is not None and final_capital < instance['initial_capital']:
+        final_capital = None
+        best_solution['route'] = None
+        best_solution['decisions'] = None
+    
     return {
-        'capital': best_solution['capital'] if best_solution['capital'] != float('-inf') else None,
+        'capital': final_capital,
         'route': best_solution['route'],
         'decisions': best_solution['decisions'],
         'routes_generated': stats['routes_generated'],
