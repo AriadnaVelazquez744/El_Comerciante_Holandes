@@ -38,7 +38,7 @@ This document presents the design, implementation, and analysis of a two-phase h
 
 This document presents an efficient algorithm for solving the Dutch Merchant Problem, designed to handle instances with $15 \leq n \leq 30$ ports, where $n$ represents the total number of ports including Amsterdam. The problem extends the basic formulation to support multiple item types per port ($m$ items) and operations that allow buying or selling $k$ units per transaction, significantly increasing the complexity compared to the single-item, single-unit case.
 
-The Dutch Merchant Problem, as formalized in the reduction analysis (Reducción.pdf), is an NP-Complete optimization problem that combines routing decisions with transaction optimization under multiple constraints: capacity limits, capital requirements, and time restrictions. The problem's relationship to the Prize-Collecting Traveling Salesman Problem (PCTSP) \cite{MarchettiSpaccamela2007PrizeCollectingTS} provides a natural framework for route generation, while the transaction optimization subproblem exhibits optimal substructure suitable for dynamic programming techniques.
+The Dutch Merchant Problem, as formalized in the reduction analysis \cite{reduccion2025}, is an NP-Complete optimization problem that combines routing decisions with transaction optimization under multiple constraints: capacity limits, capital requirements, and time restrictions. The problem's relationship to the Prize-Collecting Traveling Salesman Problem (PCTSP) \cite{MarchettiSpaccamela2007PrizeCollectingTS} provides a natural framework for route generation, while the transaction optimization subproblem exhibits optimal substructure suitable for dynamic programming techniques.
 
 \section{Problem Formalization}
 \label{sec:formalization}
@@ -99,7 +99,7 @@ $$\max \left\{ r + \sum_{\text{sales}} c_{v,m}^{venta} \cdot \text{units\_sold} 
 The problem exhibits two primary sources of complexity:
 
 \begin{enumerate}
-    \item \textbf{Route Selection}: The number of possible routes is $O(n!)$ when considering all permutations of port subsets. This is NP-hard, as established by the reduction from Prize-Collecting TSP in Reducción.pdf (Section 2.3).
+    \item \textbf{Route Selection}: The number of possible routes is $O(n!)$ when considering all permutations of port subsets. This is NP-hard, as established by the reduction from Prize-Collecting TSP \cite{reduccion2025}.
     \item \textbf{Transaction Optimization}: For a fixed route of length $L$ visiting $L$ intermediate ports, with $m$ item types and operations involving up to $k$ units, the decision space is $O((k+1)^{m \cdot L})$. Without structure exploitation, this grows exponentially.
 \end{enumerate}
 
@@ -117,7 +117,7 @@ The two-phase hybrid approach separates these two sources of complexity, applyin
 
 \subsection{Connection to Prize-Collecting TSP}
 
-The reduction analysis (Reducción.pdf, Section 2.3) establishes that the Dutch Merchant Problem is NP-hard via reduction from Prize-Collecting TSP. This connection provides a natural framework for route generation:
+The reduction analysis \cite{reduccion2025} establishes that the Dutch Merchant Problem is NP-hard via reduction from Prize-Collecting TSP. This connection provides a natural framework for route generation:
 
 \begin{itemize}
     \item \textbf{PCTSP Structure}: In PCTSP, we seek a cycle starting at root $s$ that visits a subset of nodes to maximize $\sum_{u \in S} \pi_u - \sum_{e \in \text{tour}} \omega_e$, where $\pi_u$ is the prize for visiting node $u$ and $\omega_e$ is the edge cost.
@@ -133,25 +133,88 @@ The reduction analysis (Reducción.pdf, Section 2.3) establishes that the Dutch 
 
 \subsection{Dynamic Programming Foundation}
 
-The transaction optimization subproblem, when the route is fixed, exhibits optimal substructure suitable for dynamic programming. This follows from standard DP principles (Conferencia 3 - Programación Dinámica.pdf, I2A.pdf):
+Given a fixed route $R = [v_0, v_{i_1}, ..., v_{i_L}, v_0]$, the transaction optimization subproblem seeks to determine the optimal sequence of buy/sell decisions at each port that maximizes final capital while satisfying all constraints. We demonstrate that this subproblem exhibits optimal substructure and can be solved efficiently using dynamic programming.
 
+\subsubsection{Problem Statement}
+
+For a fixed route $R$ of length $L+2$ (including start and end at Amsterdam), we define the transaction optimization problem as:
 \begin{itemize}
-    \item \textbf{Optimal Substructure}: If we know the optimal transaction decisions for ports $i+1, i+2, ..., L$ given any state $(capital, load\_vector)$, then the optimal decision at port $i$ can be determined by considering all feasible actions and selecting the one that leads to the best outcome.
-    
-    \item \textbf{State Space}: The state is defined as $(port\_index, capital\_level, load\_vector)$ where:
-    \begin{itemize}
-        \item $port\_index \in \{0, 1, ..., L\}$: Current position in the route
-        \item $capital\_level \in \mathbb{R}^+$: Current capital (may be discretized for efficiency)
-        \item $load\_vector \in [0, B]^m$: Current cargo load for each item type
-    \end{itemize}
-    
-    \item \textbf{Value Function}: $V(i, c, \vec{\ell})$ represents the maximum final capital achievable starting from port $i$ with capital $c$ and load vector $\vec{\ell}$.
-    
-    \item \textbf{Recurrence Relation}:
-    $$V(i, c, \vec{\ell}) = \max_{\text{feasible actions } a} \left\{ V(i+1, c', \vec{\ell}') \right\}$$
-    
-    where $c'$ and $\vec{\ell}'$ are the capital and load after applying action $a$ at port $i$ and traveling to the next port.
+    \item \textbf{Input}: Route $R$, initial capital $r$, capacity $B$, item types $\mathcal{M}$, prices $\mathcal{P}$, and operation limits $k$.
+    \item \textbf{Output}: Maximum final capital achievable by selecting optimal buy/sell operations at each port, subject to capacity, capital, and inventory constraints.
 \end{itemize}
+
+\subsubsection{Optimal Substructure Property}
+
+\textbf{Lemma 1 (Optimal Substructure)}: Let $R = [v_0, v_{i_1}, ..., v_{i_L}, v_0]$ be a fixed route, and let $\mathcal{S}^*$ be an optimal solution (sequence of transaction decisions) for this route. Then, for any port index $j \in \{1, 2, ..., L\}$, the subsequence of decisions in $\mathcal{S}^*$ from port $j$ onwards is an optimal solution for the subproblem starting at port $j$ with the state (capital, load vector) that results from applying the decisions at ports $1, 2, ..., j-1$.
+
+\textbf{Proof (by contradiction)}: Suppose there exists a port $j$ and state $(c_j, \vec{\ell}_j)$ at port $j$ such that the decisions from port $j$ onwards in $\mathcal{S}^*$ are not optimal. That is, there exists an alternative sequence $\mathcal{S}'$ from port $j$ onwards that, starting from state $(c_j, \vec{\ell}_j)$, yields a higher final capital than the decisions in $\mathcal{S}^*$ from port $j$ onwards. 
+
+Then, we could construct a solution $\mathcal{S}''$ that:
+\begin{enumerate}
+    \item Uses the same decisions as $\mathcal{S}^*$ for ports $1, 2, ..., j-1$ (which leads to state $(c_j, \vec{\ell}_j)$)
+    \item Uses the decisions from $\mathcal{S}'$ for ports $j, j+1, ..., L$
+\end{enumerate}
+
+This solution $\mathcal{S}''$ would yield a final capital strictly greater than $\mathcal{S}^*$, contradicting the optimality of $\mathcal{S}^*$. Therefore, the optimal substructure property holds.
+
+\subsubsection{State Definition}
+
+We define the state of the system at any point in the route as a triple:
+$$(i, c, \vec{\ell})$$
+
+where:
+\begin{itemize}
+    \item $i \in \{0, 1, ..., L\}$: Port index in route $R$ (0 = Amsterdam, $i \geq 1$ = intermediate ports)
+    \item $c \in \mathbb{R}^+$: Current capital level
+    \item $\vec{\ell} = (\ell_1, \ell_2, ..., \ell_m) \in [0, B]^m$: Load vector, where $\ell_j$ is the number of units of item type $j$ currently carried
+\end{itemize}
+
+\subsubsection{Value Function and Recurrence Relation}
+
+We define the value function $V(i, c, \vec{\ell})$ as the maximum final capital achievable starting from port index $i$ with capital $c$ and load vector $\vec{\ell}$, following route $R$ from port $i$ to the end.
+
+\textbf{Base Cases}:
+\begin{itemize}
+    \item When $i = L$ (last port before returning to Amsterdam): After performing transactions at port $R[L]$ and traveling back to Amsterdam:
+    $$V(L, c, \vec{\ell}) = c - c_{R[L], v_0}$$
+    
+    where $c_{R[L], v_0}$ is the travel cost from the last port to Amsterdam, and we assume no further transactions are possible at Amsterdam (or they have been accounted for).
+    
+    More precisely, if we allow transactions at the last port: $V(L, c, \vec{\ell})$ represents the capital after optimal transactions at port $R[L]$ and returning to Amsterdam.
+\end{itemize}
+
+\textbf{Recurrence Relation}:
+
+For $i \in \{0, 1, ..., L-1\}$, let $v_i = R[i+1]$ be the port at index $i$ in the route (the $(i+1)$-th port in $R$, excluding the starting Amsterdam). The recurrence is:
+
+$$V(i, c, \vec{\ell}) = \max_{\text{feasible actions } a \in \mathcal{A}(v_i, c, \vec{\ell})} \left\{ V(i+1, c'(a), \vec{\ell}'(a)) \right\}$$
+
+where $\mathcal{A}(v_i, c, \vec{\ell})$ is the set of feasible actions at port $v_i$ given state $(c, \vec{\ell})$, and:
+\begin{itemize}
+    \item $c'(a) = c + \text{profit}(a) - c_{v_i, v_{i+1}}$: Capital after action $a$ and travel to next port
+    \item $\vec{\ell}'(a) = \vec{\ell} + \text{load\_change}(a)$: Load vector after action $a$
+    \item $\text{profit}(a)$: Net profit from action $a$ (sales revenue minus purchase costs)
+    \item $\text{load\_change}(a)$: Change in load vector from action $a$ (positive for purchases, negative for sales)
+    \item $c_{v_i, v_{i+1}}$: Travel cost from port $v_i$ to the next port in the route
+\end{itemize}
+
+An action $a$ is \textbf{feasible} if:
+\begin{enumerate}
+    \item Capital remains non-negative: $c + \text{profit}(a) \geq 0$
+    \item Capacity is not exceeded: $\sum_{j=1}^{m} (\ell_j + \text{load\_change}_j(a)) \leq B$
+    \item Inventory constraints: $\text{load\_change}_j(a) \geq -\ell_j$ for all $j$ (cannot sell more than carried)
+    \item Operation limits: Each buy/sell operation involves at most $k$ units per item type
+\end{enumerate}
+
+\subsubsection{Correctness and Complexity}
+
+\textbf{Theorem 1 (Correctness)}: The dynamic programming algorithm correctly computes the maximum final capital for a fixed route $R$.
+
+\textbf{Proof}: By the optimal substructure property (Lemma 1), the recurrence relation correctly combines optimal solutions to subproblems. The base cases handle the termination condition (returning to Amsterdam). By computing $V(i, c, \vec{\ell})$ for all reachable states in reverse order (from $i = L$ down to $i = 0$), we ensure that when computing $V(i, c, \vec{\ell})$, all required values $V(i+1, c', \vec{\ell}')$ have already been computed. The algorithm returns $V(0, r, \vec{0})$, which represents the maximum final capital starting from Amsterdam with initial capital $r$ and empty cargo.
+
+\textbf{Time Complexity}: For a route of length $L$, the state space size is $O(L \times K_{capital} \times (B+1)^m)$ where $K_{capital}$ is the number of distinct capital levels (may be discretized). For each state, we evaluate at most $O((k+1)^m)$ feasible actions (combinations of buy/sell decisions for $m$ item types, each with up to $k$ units). The total complexity is $O(L \times K_{capital} \times (B+1)^m \times (k+1)^m)$.
+
+\textbf{Space Complexity}: $O(L \times K_{capital} \times (B+1)^m)$ for storing the DP table.
 
 \subsection{Advantages of Separation}
 
@@ -379,42 +442,6 @@ The beam search in Phase 1 uses several pruning strategies:
 \subsubsection{Early Termination}
 
 In Phase 2, if a route's PCTSP bound is worse than the current best solution (even with optimal transactions), the DP computation is skipped entirely.
-
-\subsection{Complexity Analysis}
-
-\subsubsection{Time Complexity}
-
-\begin{itemize}
-    \item \textbf{Phase 1 - Route Generation}: $O(K \times n^3)$
-    \begin{itemize}
-        \item $K$: Beam width (controlled parameter)
-        \item $n$: Number of ports
-        \item Bound calculation: $O(n)$ per route
-        \item Total routes considered: $O(K \times n)$
-    \end{itemize}
-    
-    \item \textbf{Phase 2 - Transaction DP}: $O(K \times L \times m \times k \times B^m \times K_{capital})$
-    \begin{itemize}
-        \item $K$: Number of routes evaluated
-        \item $L$: Route length (typically $O(n)$)
-        \item $m$: Number of item types
-        \item $k$: Maximum units per operation
-        \item $B$: Capacity
-        \item $K_{capital}$: Number of capital bands (approximately 100-200)
-    \end{itemize}
-    
-    \item \textbf{Overall}: $O(K \times n^3 + K \times n \times m \times k \times B^m \times K_{capital})$
-    
-    \item \textbf{Key Advantage}: Unlike brute force's $O(n! \times (k+1)^{m \cdot n})$, this is polynomial in the controlled parameter $K$ and fixed parameters $m$, $k$, $B$, $K_{capital}$.
-\end{itemize}
-
-\subsubsection{Space Complexity}
-
-\begin{itemize}
-    \item \textbf{Route Generation}: $O(K \times n)$ for beam storage
-    \item \textbf{Transaction DP}: $O(L \times K_{capital} \times (B+1)^m)$ for DP tables
-    \item \textbf{Overall}: $O(K \times n + L \times K_{capital} \times (B+1)^m)$
-\end{itemize}
 
 \section{Experimental Results}
 \label{sec:results}
