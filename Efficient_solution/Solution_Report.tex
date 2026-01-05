@@ -448,7 +448,29 @@ In Phase 2, if a route's PCTSP bound is worse than the current best solution (ev
 
 \subsection{Test Instances}
 
-We tested the algorithm on instances with:
+We evaluated the algorithm on two complementary families of instances.
+
+\subsubsection{Small Instances for Exact Comparison}
+
+First, we considered small single-commodity instances where exact brute-force algorithms are still tractable. These instances were generated with the unified generator used in the brute-force experiments (ports including Amsterdam $n \in \{2,3,4,5,6,7,8\}$, single item, $k=1$).\footnote{See the experimental notebook and the CSV file \texttt{data/comparison\_bf\_vs\_efficient.csv} for full details.}
+
+For each $n$, we computed:
+\begin{itemize}
+    \item The optimal capital using three exact algorithms: pure brute force, brute force with pruning, and a unified hybrid brute-force+DP method.
+    \item The capital returned by the efficient two-phase hybrid algorithm.
+    \item Execution times and the number of routes/branches explored by each method.
+\end{itemize}
+
+The results (summarised from \texttt{data/comparison\_bf\_vs\_efficient.csv}) are:
+\begin{itemize}
+    \item For $n = 2,3,4,5,6,7$ the efficient algorithm matches the exact optimal capital within numerical tolerance. In particular, for $n \in \{3,4,5,6,7\}$ the capital values coincide exactly with those of all brute-force baselines.
+    \item For $n = 8$ the efficient algorithm finds a slightly lower capital than the exact optimum (182.0 vs.\ 184.0), while being roughly two orders of magnitude faster than pure brute force (about 0.33\,s vs.\ 22.0\,s) and more than an order of magnitude faster than brute force with pruning (about 0.33\,s vs.\ 4.88\,s).
+    \item In all feasible cases the efficient algorithm returns a final capital greater than or equal to the initial capital, and its solutions pass the same feasibility checks (capacity, time, and capital non-negativity) used for the exact methods.
+\end{itemize}
+
+\subsubsection{Medium/Large Instances for Scalability}
+
+We also evaluated the algorithm on larger, multi-item instances designed to stress the scalability of the approach. These instances have:
 \begin{itemize}
     \item Port counts: $n \in \{15, 20, 25, 30\}$
     \item Item types: $m = 2$ items per port
@@ -458,9 +480,9 @@ We tested the algorithm on instances with:
     \item Initial capital: $r = 100 + (n-3) \times 20$
 \end{itemize}
 
-\subsection{Performance Metrics}
+\subsection{Performance Metrics for Medium/Large Instances}
 
-Table~\ref{tab:performance} presents execution results for various instance sizes.
+Table~\ref{tab:performance} presents execution results for the larger instances.
 
 \begin{table}[h]
 \centering
@@ -487,33 +509,51 @@ $n$ & Routes Generated & Routes Evaluated & Execution Time (s) & Final Capital &
     
     \item \textbf{DP Efficiency}: Most routes are pruned by PCTSP bounds, so only a small fraction require DP evaluation. For $n \leq 25$, only 1 route needed DP evaluation, indicating effective pruning.
     
-    \item \textbf{Execution Time Growth}: Time grows sub-exponentially with $n$:
+    \item \textbf{Execution Time Growth}: For the medium/large set, time grows sub-exponentially with $n$:
     \begin{itemize}
         \item $n=15 \rightarrow 20$: 2.2$\times$ increase
         \item $n=20 \rightarrow 25$: 1.9$\times$ increase  
         \item $n=25 \rightarrow 30$: 34.5$\times$ increase (due to more DP evaluations)
     \end{itemize}
     
-    \item \textbf{Solution Quality}: The algorithm finds profitable solutions for all test instances, with capital increasing with instance size (as expected with more ports and higher initial capital).
+    \item \textbf{Solution Quality}: The algorithm finds profitable solutions for all tested instances, with capital increasing with instance size (as expected with more ports and higher initial capital). On small instances, the efficient algorithm matches the exact optimum for $n \leq 7$ and remains very close to optimal for $n=8$ while achieving substantial speed-ups over brute force.
 \end{enumerate}
 
 \subsection{Comparison with Theoretical Bounds}
 
 The PCTSP bounds provide effective pruning:
 \begin{itemize}
-    \item For $n \leq 25$, the first route generated had a bound high enough that no other routes needed evaluation
-    \item For $n=30$, 52 routes were evaluated, indicating the bound becomes less selective for larger instances
-    \item The bound calculation overhead is minimal ($O(n)$ per route), making it an efficient pruning tool
+    \item For $n \leq 25$, the first route generated had a bound high enough that no other routes needed evaluation.
+    \item For $n=30$, 52 routes were evaluated, indicating the bound becomes less selective for larger instances.
+    \item The bound calculation overhead is minimal ($O(n)$ per route), making it an efficient pruning tool.
 \end{itemize}
 
 \subsection{Correctness Validation}
 
-We validated correctness on small instances ($n \in \{3, 4, 5\}$) where solutions can be verified:
+We validated correctness on small instances ($n \in \{2,3,4,5,6,7,8\}$) where solutions can be verified against exact algorithms:
 \begin{itemize}
-    \item All solutions are feasible (satisfy capacity, capital, and time constraints)
-    \item Routes are valid (start and end at Amsterdam, no repeated ports)
-    \item Solutions are profitable (final capital $>$ initial capital for feasible instances)
+    \item All solutions returned by the efficient algorithm are feasible (satisfy capacity, capital, and time constraints as defined in Section~\ref{sec:formalization}).
+    \item Routes are valid (start and end at Amsterdam, with no repeated intermediate ports).
+    \item For $n \leq 7$ the final capital matches the exact optimum computed by the brute-force baselines; for $n = 8$ the efficient algorithm finds a near-optimal solution that trades a small loss in capital for a substantial reduction in execution time.
 \end{itemize}
+
+\subsection{Beam Width Sensitivity}
+
+To analyse the effect of the beam width parameter on both solution quality and running time, we fixed a representative instance with $n=15$ ports and evaluated the algorithm for beam widths $\{50, 100, 200, 500\}$. The detailed numerical results are reported in \texttt{data/beam\_width\_analysis.csv}; Figure~\ref{fig:beam-width-capital} illustrates the corresponding capital and time behaviour.
+
+For this experiment we observed:
+\begin{itemize}
+    \item Increasing the beam width from 50 to 200 leads to a modest increase in execution time (from approximately 13.5\,s to 14.7\,s) but improves the final capital from 435.4 to 438.8.
+    \item Further increasing the beam width to 500 does not yield additional capital gains (the best capital remains 438.8) and only increases running time (to roughly 16.0\,s).
+    \item Beam width $K = 200$ therefore provides the best trade-off between execution time and solution quality in this setting.
+\end{itemize}
+
+\begin{figure}[h]
+    \centering
+    \includegraphics[width=0.7\textwidth]{../figures/beam_width_analysis.png}
+    \caption{Effect of beam width on execution time and final capital for $n=15$ (data from \texttt{data/beam\_width\_analysis.csv}). Beam width $K=200$ achieves the highest capital with the lowest execution time among the settings that reach that capital level.}
+    \label{fig:beam-width-capital}
+\end{figure}
 
 \section{Conclusions}
 \label{sec:conclusions}
@@ -529,53 +569,26 @@ The two-phase hybrid algorithm successfully addresses the challenge of solving t
     \item \textbf{Flexibility}: Supports variable numbers of items ($m$) and operation sizes ($k$)
 \end{enumerate}
 
-\subsection{Scalability Analysis}
+\subsection{Scalability and Practical Use}
 
-The algorithm's performance demonstrates:
+The experimental evidence indicates that the two-phase hybrid algorithm exhibits markedly better scalability than exact brute-force methods. Execution times grow much more slowly than the factorial behaviour of exhaustive search, and the beam width parameter provides a tunable mechanism to balance solution quality against computational effort. For medium-sized instances in the range $15 \leq n \leq 30$, the algorithm consistently produces profitable and feasible solutions within seconds to minutes, whereas exact methods become intractable.
 
-\begin{itemize}
-    \item \textbf{Sub-exponential growth}: Execution time grows much slower than brute force's $O(n!)$
-    \item \textbf{Controlled exploration}: Beam width $K$ provides a tunable parameter balancing solution quality vs. computation time
-    \item \textbf{Effective pruning}: PCTSP bounds eliminate most routes without DP evaluation
-    \item \textbf{Practical limits}: For $n > 30$, increasing beam width or using more sophisticated route generation heuristics may be necessary
-\end{itemize}
+\subsection{Theoretical and Practical Contributions}
 
-\subsection{Theoretical Contributions}
+From a theoretical standpoint, this work illustrates how the NP-hard Dutch Merchant Problem \cite{reduccion2025} can be attacked effectively by separating the route selection and transaction optimization components and combining PCTSP-inspired bounds with multi-dimensional dynamic programming. From a practical standpoint, the implementation demonstrates that this hybrid approach can handle realistic instance sizes with multiple items and $k$-unit operations, while remaining flexible enough to accommodate alternative route heuristics and DP variants.
 
-This work demonstrates:
+\subsection{Future Work}
+
+Several directions for future research emerge from this study:
 
 \begin{enumerate}
-    \item \textbf{Separation of Concerns}: Separating route generation (NP-hard) from transaction optimization (polynomial with DP) is an effective strategy
-    \item \textbf{PCTSP Connection}: Leveraging the problem's relationship to Prize-Collecting TSP provides natural bounds and heuristics
-    \item \textbf{DP Applicability}: The transaction subproblem exhibits optimal substructure, making DP the appropriate technique
-    \item \textbf{Hybrid Approach}: Combining heuristic route generation with exact transaction optimization balances efficiency and solution quality
+    \item \textbf{Adaptive Beam Control}: Dynamically adjust the beam width based on the distribution of route bounds and intermediate DP results.
+    \item \textbf{Parallelisation}: Exploit parallel hardware by evaluating multiple candidate routes concurrently in Phase~2.
+    \item \textbf{Enhanced Route Heuristics}: Integrate more advanced PCTSP approximation algorithms and local improvement procedures into Phase~1.
+    \item \textbf{State Space Refinement}: Further reduce the DP state space for large $m$ or $B$ through item grouping or decomposition techniques.
 \end{enumerate}
 
-\subsection{Future Improvements}
-
-Potential enhancements for even larger instances:
-
-\begin{enumerate}
-    \item \textbf{Adaptive Beam Width}: Dynamically adjust beam width based on bound distribution
-    \item \textbf{Item Independence Exploitation}: Detect and exploit cases where items have separate capacity constraints
-    \item \textbf{Parallel Route Evaluation}: Evaluate multiple routes' DP problems in parallel
-    \item \textbf{Advanced Route Heuristics}: Use more sophisticated PCTSP approximation algorithms for route generation
-    \item \textbf{State Space Reduction}: Further optimize DP state representation for very large $m$ or $B$
-\end{enumerate}
-
-\subsection{Connection to Project Requirements}
-
-This implementation fulfills the requirements for an efficient algorithm that:
-\begin{itemize}
-    \item Handles instances with $15 \leq n \leq 30$ ports
-    \item Supports multiple items per port ($m$ items)
-    \item Allows $k$-unit buy/sell operations
-    \item Uses dynamic programming for transaction optimization
-    \item Leverages PCTSP-inspired heuristics for route generation
-    \item Provides theoretical justification through complexity analysis and connection to established problems
-\end{itemize}
-
-The algorithm serves as a practical solution for medium-to-large instances where exact brute force methods become intractable, while maintaining theoretical foundations in both Prize-Collecting TSP and Dynamic Programming literature.
+Overall, the proposed algorithm provides a sound and empirically validated foundation for solving medium-to-large instances of the Dutch Merchant Problem, and it offers a natural platform on which more sophisticated heuristics and approximation schemes can be developed.
 
 \bibliographystyle{plain}
 \bibliography{../referencias}
