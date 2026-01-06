@@ -1070,10 +1070,12 @@ def two_phase_hybrid_solve(instance: Dict, timeout: float = 500.0,
     
     # Combine: non-trivial first, then trivial as fallback
     all_routes = non_trivial_routes + trivial_routes
+    initial_routes_count = len(all_routes)
+    regen_triggered = False  # Only trigger regeneration once when 25% processed
     
     routes_evaluated_count = 0
     batch_size = 50
-    max_cycles = 50
+    max_cycles = 100
     cycle_count = 0
     
     # CONTINUOUS CYCLE: Process in batches until valid solution found
@@ -1146,6 +1148,37 @@ def two_phase_hybrid_solve(instance: Dict, timeout: float = 500.0,
         # If no routes were evaluated in this batch (all skipped or already cached), break
         if routes_in_batch == 0:
             break
+
+        # REGENERATION: If we've processed 25% of initial routes with no valid solution, generate more
+        processed_enough = routes_evaluated_count >= max(1, int(0.25 * initial_routes_count))
+        no_valid_solution = (best_solution['capital'] == float('-inf') or best_solution['capital'] < initial_capital)
+        if (not regen_triggered and processed_enough and no_valid_solution and
+                time.time() - start_time < timeout * 0.9):
+            remaining_time = timeout - (time.time() - start_time)
+            route_gen_timeout = min(remaining_time * 0.1, 20.0)
+            new_routes = generate_promising_routes(
+                instance,
+                beam_width=min(adaptive_beam_width * 2, 600),
+                timeout=route_gen_timeout,
+                adaptive_beam=False
+            )
+            # Deduplicate and merge, preserving non-trivial priority
+            new_non_trivial = []
+            new_trivial = []
+            existing = {tuple(r) for r, _ in all_routes}
+            for r, b in new_routes:
+                rt = tuple(r)
+                if rt in existing:
+                    continue
+                if len(r) <= 2 and r[0] == 0 and r[-1] == 0:
+                    new_trivial.append((r, b))
+                else:
+                    new_non_trivial.append((r, b))
+                stats['routes_generated'] += 1
+                existing.add(rt)
+            # Rebuild all_routes with new additions while keeping priority
+            all_routes = all_routes + new_non_trivial + new_trivial
+            regen_triggered = True
     
     # Round 2: Generate additional routes based on successful patterns
     # CRITICAL IMPROVEMENT: Skip Round 2 for large instances (n >= 15) to eliminate cycling
