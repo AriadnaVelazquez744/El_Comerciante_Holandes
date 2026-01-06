@@ -277,9 +277,412 @@ def generate_promising_routes(instance: Dict, beam_width: int = 100,
     return final_routes
 
 
+def solve_transactions_dp_total_load(route: List[int], instance: Dict) -> Tuple[Optional[float], Optional[List[Dict]]]:
+    """
+    Solve transaction optimization using total load discretization (for m >= 8).
+    
+    This is a CRITICAL OPTIMIZATION that reduces state space from O(B^m) to O(B)
+    by tracking only total load instead of per-item loads.
+    
+    Args:
+        route: Fixed route [v0, v1, ..., vL, v0]
+        instance: Problem instance dictionary
+        
+    Returns:
+        (max_capital, decisions_sequence) or (None, None) if infeasible
+    """
+    if len(route) < 3:
+        return None, None
+    
+    L = len(route) - 2
+    purchase_prices = instance['purchase_prices']
+    sale_prices = instance['sale_prices']
+    travel_costs = instance['travel_costs']
+    travel_times = instance['travel_times']
+    initial_capital = instance['initial_capital']
+    capacity = instance['capacity']
+    max_units_per_op = instance.get('max_units_per_op', capacity)
+    T_max = instance['max_time']
+    
+    first_port = route[1] if L > 0 else 0
+    num_items = len(purchase_prices[first_port]) if first_port > 0 else 0
+    
+    if num_items == 0:
+        return None, None
+    
+    # Check time feasibility
+    total_travel_time = sum(travel_times[route[i]][route[i+1]] for i in range(len(route) - 1))
+    if total_travel_time > T_max:
+        return None, None
+    
+    # Adaptive capital discretization for large m
+    capital_band_width = max(2.0, initial_capital / 50.0)
+    
+    def get_capital_band(capital: float) -> int:
+        return int(capital / capital_band_width)
+    
+    def get_capital_from_band(band: int) -> float:
+        return band * capital_band_width
+    
+    # Initialize
+    first_port = route[1]
+    travel_cost_to_first = travel_costs[0][first_port]
+    capital_after_travel = initial_capital - travel_cost_to_first
+    
+    if capital_after_travel < 0:
+        return None, None
+    
+    # State: (capital_band, total_load, time_used) - MUCH smaller than (capital_band, load_vector, time_used)
+    dp = [defaultdict(lambda: (float('-inf'), None, None, None)) for _ in range(L + 1)]
+    
+    initial_band = get_capital_band(capital_after_travel)
+    initial_time = travel_times[0][first_port]
+    # Store: (best_capital, prev_state, decision, item_distribution_estimate)
+    dp[0][(initial_band, 0, initial_time)] = (capital_after_travel, None, None, tuple([0] * num_items))
+    
+    # Process each port
+    for i in range(L):
+        port = route[i + 1]
+        dp_next = defaultdict(lambda: (float('-inf'), None, None, None))
+        
+        for (cap_band, total_load, time_used), (best_cap, prev_state, prev_decision, load_dist) in dp[i].items():
+            if best_cap == float('-inf'):
+                continue
+            
+            capital = get_capital_from_band(cap_band)
+            
+            if time_used > T_max:
+                continue
+            
+            # Generate actions: for each item, consider do nothing, buy 1, sell 1
+            # This is a greedy approximation - we don't consider all combinations
+            actions_to_consider = []
+            
+            for item_idx in range(num_items):
+                # Estimate current load for this item (from load_dist if available)
+                current_item_load = load_dist[item_idx] if load_dist else 0
+                
+                # Option 1: Do nothing
+                actions_to_consider.append((item_idx, 0))
+                
+                # Option 2: Buy 1 unit (if capacity allows and capital allows)
+                if total_load < capacity:
+                    price_per_unit = purchase_prices[port][item_idx]
+                    if capital >= price_per_unit:
+                        actions_to_consider.append((item_idx, 1))
+                
+                # Option 3: Sell 1 unit (if we have this item)
+                if current_item_load > 0:
+                    actions_to_consider.append((item_idx, -1))
+            
+            # Apply each action
+            for action in actions_to_consider:
+                item_idx, units = action
+                
+                if units > 0:  # Buying
+                    if total_load + units > capacity:
+                        continue
+                    price_per_unit = purchase_prices[port][item_idx]
+                    total_cost = price_per_unit * units
+                    if capital < total_cost:
+                        continue
+                    new_capital = capital - total_cost
+                    new_total_load = total_load + units
+                    # Update load distribution estimate
+                    new_load_dist = list(load_dist) if load_dist else [0] * num_items
+                    new_load_dist[item_idx] += units
+                    
+                elif units < 0:  # Selling
+                    if current_item_load < abs(units):
+                        continue
+                    price_per_unit = sale_prices[port][item_idx]
+                    total_revenue = price_per_unit * abs(units)
+                    new_capital = capital + total_revenue
+                    new_total_load = total_load - abs(units)
+                    new_load_dist = list(load_dist) if load_dist else [0] * num_items
+                    new_load_dist[item_idx] -= abs(units)
+                else:  # Do nothing
+                    new_capital = capital
+                    new_total_load = total_load
+                    new_load_dist = load_dist
+                
+                if new_capital < 0 or new_total_load < 0 or new_total_load > capacity:
+                    continue
+                
+                operation_time = 1 if units != 0 else 0
+                new_time = time_used + operation_time
+                
+                if new_time > T_max:
+                    continue
+                
+                new_band = get_capital_band(new_capital)
+                new_state = (new_band, new_total_load, new_time)
+                
+                current_best, _, _, _ = dp_next.get(new_state, (float('-inf'), None, None, None))
+                if new_capital > current_best:
+                    dp_next[new_state] = (new_capital, (cap_band, total_load, time_used), (i, port, action), tuple(new_load_dist))
+        
+        # Travel to next port
+        if i < L - 1:
+            next_port = route[i + 2]
+        else:
+            next_port = 0
+        
+        travel_cost = travel_costs[port][next_port]
+        travel_time_cost = travel_times[port][next_port]
+        
+        for (cap_band, total_load, time_after_ops), (best_cap, prev_state, prev_decision, load_dist) in dp_next.items():
+            capital = get_capital_from_band(cap_band)
+            new_capital = capital - travel_cost
+            
+            if new_capital < 0:
+                continue
+            
+            new_time = time_after_ops + travel_time_cost
+            
+            if new_time > T_max:
+                continue
+            
+            new_band = get_capital_band(new_capital)
+            new_state = (new_band, total_load, new_time)
+            
+            current_best, _, _, _ = dp[i + 1].get(new_state, (float('-inf'), None, None, None))
+            if new_capital > current_best:
+                dp[i + 1][new_state] = (new_capital, prev_state, prev_decision, load_dist)
+    
+    # Find best final state
+    best_final_capital = float('-inf')
+    best_final_state = None
+    
+    for state, (capital, prev_state, prev_decision, _) in dp[L].items():
+        if capital > best_final_capital:
+            best_final_capital = capital
+            best_final_state = (state, prev_state, prev_decision)
+    
+    if best_final_capital == float('-inf') or best_final_capital < initial_capital:
+        return None, None
+    
+    # Reconstruct decisions (simplified - may not be exact due to approximation)
+    decisions = []
+    current_state_key = best_final_state[0]
+    
+    for i in range(L - 1, -1, -1):
+        if current_state_key is None:
+            break
+        
+        state_data = dp[i + 1].get(current_state_key)
+        if state_data is None:
+            break
+        
+        best_cap, prev_state, decision, _ = state_data
+        
+        if decision is not None:
+            port_idx, port, action = decision
+            item_idx, units = action
+            decisions.insert(0, {
+                'port': port,
+                'item': item_idx,
+                'action': units
+            })
+        
+        if prev_state is not None:
+            current_state_key = prev_state
+        else:
+            break
+    
+    return best_final_capital, decisions
+
+
+def solve_transactions_dp_independent(route: List[int], instance: Dict) -> Tuple[Optional[float], Optional[List[Dict]]]:
+    """
+    Solve transaction optimization using item-independent approximation (for m >= 6).
+    
+    This is a CRITICAL OPTIMIZATION that solves each item independently and combines results.
+    Complexity: O(m * B * L) instead of O(B^m * L)
+    
+    Args:
+        route: Fixed route [v0, v1, ..., vL, v0]
+        instance: Problem instance dictionary
+        
+    Returns:
+        (max_capital, decisions_sequence) or (None, None) if infeasible
+    """
+    if len(route) < 3:
+        return None, None
+    
+    L = len(route) - 2
+    purchase_prices = instance['purchase_prices']
+    sale_prices = instance['sale_prices']
+    travel_costs = instance['travel_costs']
+    travel_times = instance['travel_times']
+    initial_capital = instance['initial_capital']
+    capacity = instance['capacity']
+    max_units_per_op = instance.get('max_units_per_op', capacity)
+    T_max = instance['max_time']
+    
+    first_port = route[1] if L > 0 else 0
+    num_items = len(purchase_prices[first_port]) if first_port > 0 else 0
+    
+    if num_items == 0:
+        return None, None
+    
+    # Check time feasibility
+    total_travel_time = sum(travel_times[route[i]][route[i+1]] for i in range(len(route) - 1))
+    if total_travel_time > T_max:
+        return None, None
+    
+    # Solve each item independently with capacity constraint
+    # We allocate capacity proportionally to items based on profit potential
+    item_solutions = []  # List of (item_idx, decisions, capital_gain, capacity_used)
+    
+    # Calculate profit potential for each item
+    item_profits = []
+    for item_idx in range(num_items):
+        total_profit = 0.0
+        for i in range(1, len(route) - 1):
+            port = route[i]
+            profit_per_unit = sale_prices[port][item_idx] - purchase_prices[port][item_idx]
+            if profit_per_unit > 0:
+                total_profit += profit_per_unit
+        item_profits.append((item_idx, total_profit))
+    
+    # Sort by profit potential (descending)
+    item_profits.sort(key=lambda x: x[1], reverse=True)
+    
+    # Allocate capacity to items (greedy allocation)
+    remaining_capacity = capacity
+    allocated_capacity = {}  # item_idx -> allocated capacity
+    
+    for item_idx, profit in item_profits:
+        # Allocate capacity proportionally, but at least 1 unit per profitable item
+        if profit > 0:
+            alloc = max(1, min(remaining_capacity // (num_items - len(allocated_capacity)), capacity // num_items))
+            allocated_capacity[item_idx] = alloc
+            remaining_capacity -= alloc
+    
+    # Solve each item independently with its allocated capacity
+    total_capital_gain = 0.0
+    all_decisions = []
+    
+    for item_idx, profit in item_profits:
+        if item_idx not in allocated_capacity:
+            continue
+        
+        item_capacity = allocated_capacity[item_idx]
+        
+        # Create a single-item instance for this item
+        single_item_instance = {
+            'purchase_prices': {port: [purchase_prices[port][item_idx]] for port in purchase_prices},
+            'sale_prices': {port: [sale_prices[port][item_idx]] for port in sale_prices},
+            'travel_costs': instance['travel_costs'],
+            'travel_times': instance['travel_times'],
+            'initial_capital': initial_capital,  # Share capital across items
+            'capacity': item_capacity,
+            'max_time': T_max,
+            'max_units_per_op': min(max_units_per_op, item_capacity),
+            'ports': instance['ports']
+        }
+        
+        # Solve with single-item DP (recursive call, but with m=1, so it uses full DP)
+        # We need to call the full DP with a modified instance
+        # For efficiency, we'll use a simplified greedy approach per item
+        item_capital_gain, item_decisions = solve_item_greedy(route, item_idx, single_item_instance, initial_capital)
+        
+        if item_decisions:
+            total_capital_gain += item_capital_gain
+            # Adjust item index in decisions
+            for dec in item_decisions:
+                dec['item'] = item_idx
+            all_decisions.extend(item_decisions)
+            initial_capital += item_capital_gain  # Update capital for next items
+    
+    # Calculate final capital
+    first_port = route[1]
+    travel_cost_to_first = travel_costs[0][first_port]
+    capital_after_travel = instance['initial_capital'] - travel_cost_to_first
+    
+    if capital_after_travel < 0:
+        return None, None
+    
+    # Apply travel costs for the route
+    total_travel_cost = sum(travel_costs[route[i]][route[i+1]] for i in range(len(route) - 1))
+    final_capital = instance['initial_capital'] - total_travel_cost + total_capital_gain
+    
+    if final_capital < instance['initial_capital']:
+        return None, None
+    
+    # Sort decisions by port order
+    all_decisions.sort(key=lambda x: route.index(x['port']) if x['port'] in route else len(route))
+    
+    return final_capital, all_decisions
+
+
+def solve_item_greedy(route: List[int], item_idx: int, instance: Dict, available_capital: float) -> Tuple[float, List[Dict]]:
+    """
+    Greedy solution for a single item along a route.
+    This is used by the item-independent approximation.
+    """
+    L = len(route) - 2
+    if L == 0:
+        return 0.0, []
+    
+    purchase_prices = instance['purchase_prices']
+    sale_prices = instance['sale_prices']
+    capacity = instance['capacity']
+    max_units_per_op = instance.get('max_units_per_op', capacity)
+    
+    decisions = []
+    current_load = 0
+    current_capital = available_capital
+    total_profit = 0.0
+    
+    # Greedy strategy: buy at first profitable port, sell at best opportunity
+    for i in range(1, len(route) - 1):
+        port = route[i]
+        purchase_price = purchase_prices[port][0]  # Single item
+        sale_price = sale_prices[port][0]
+        profit_per_unit = sale_price - purchase_price
+        
+        # If profitable and we have capacity and capital, buy
+        if profit_per_unit > 0 and current_load < capacity and current_capital >= purchase_price:
+            # Buy as much as possible
+            max_buy = min(max_units_per_op, capacity - current_load, int(current_capital / purchase_price))
+            if max_buy > 0:
+                cost = purchase_price * max_buy
+                current_capital -= cost
+                current_load += max_buy
+                decisions.append({
+                    'port': port,
+                    'item': item_idx,
+                    'action': max_buy
+                })
+        
+        # If we have items, consider selling
+        if current_load > 0:
+            # Sell all if profitable
+            if profit_per_unit > 0:
+                sell_amount = min(max_units_per_op, current_load)
+                revenue = sale_price * sell_amount
+                current_capital += revenue
+                current_load -= sell_amount
+                total_profit += profit_per_unit * sell_amount
+                decisions.append({
+                    'port': port,
+                    'item': item_idx,
+                    'action': -sell_amount
+                })
+    
+    return total_profit, decisions
+
+
 def solve_transactions_dp(route: List[int], instance: Dict) -> Tuple[Optional[float], Optional[List[Dict]]]:
     """
     Solve transaction optimization for a fixed route using multi-dimensional DP.
+    
+    Uses different strategies based on number of items (CRITICAL OPTIMIZATIONS):
+    - m >= 8: Total load discretization (O(B) states, fastest, approximate)
+    - 6 <= m < 8: Item-independent approximation (O(m*B) states, faster, approximate)
+    - m < 6: Full multi-dimensional DP (O(B^m) states, exact, slower)
     
     Args:
         route: Fixed route [v0, v1, ..., vL, v0]
@@ -309,6 +712,14 @@ def solve_transactions_dp(route: List[int], instance: Dict) -> Tuple[Optional[fl
     
     if num_items == 0:
         return None, None
+    
+    # CRITICAL IMPROVEMENT: Use total load discretization for very large m (check first)
+    if num_items >= 8:
+        return solve_transactions_dp_total_load(route, instance)
+    
+    # CRITICAL IMPROVEMENT: Use item-independent approximation for large m
+    if num_items >= 6:
+        return solve_transactions_dp_independent(route, instance)
     
     # Check time feasibility (travel time only - operations will be tracked in DP)
     total_travel_time = sum(travel_times[route[i]][route[i+1]] for i in range(len(route) - 1))
@@ -437,6 +848,44 @@ def solve_transactions_dp(route: List[int], instance: Dict) -> Tuple[Optional[fl
                 current_best, _, _ = dp_next.get(new_state, (float('-inf'), None, None))
                 if new_capital > current_best:
                     dp_next[new_state] = (new_capital, (cap_band, load_vec, time_used), (i, port, action))
+        
+        # CRITICAL IMPROVEMENT: Dominance pruning before travel
+        # Remove dominated states: if state A has more capital and same/less load than state B, remove B
+        if len(dp_next) > 1000:  # Only apply dominance pruning if state space is large
+            pruned_dp_next = {}
+            states_list = list(dp_next.items())
+            states_list.sort(key=lambda x: (sum(x[0][1]), -x[1][0]))  # Sort by total load, then capital (descending)
+            
+            for state, value in states_list:
+                cap_band, load_vec, time_used = state
+                best_cap, prev_state, prev_decision = value
+                total_load = sum(load_vec)
+                
+                # Check if this state is dominated
+                is_dominated = False
+                for existing_state, existing_value in pruned_dp_next.items():
+                    existing_cap_band, existing_load_vec, existing_time = existing_state
+                    existing_cap, _, _ = existing_value
+                    existing_total_load = sum(existing_load_vec)
+                    
+                    # State is dominated if: same time, less capital, same or more load
+                    if (existing_time == time_used and 
+                        existing_cap >= best_cap and 
+                        existing_total_load <= total_load and
+                        all(existing_load_vec[j] <= load_vec[j] for j in range(len(load_vec)))):
+                        is_dominated = True
+                        break
+                
+                if not is_dominated:
+                    # Remove states that are dominated by this one
+                    pruned_dp_next = {s: v for s, v in pruned_dp_next.items() 
+                                     if not (s[2] == time_used and 
+                                            best_cap >= v[0] and 
+                                            total_load <= sum(s[1]) and
+                                            all(load_vec[j] <= s[1][j] for j in range(len(load_vec))))}
+                    pruned_dp_next[state] = value
+            
+            dp_next = pruned_dp_next
         
         # Travel to next port
         if i < L - 1:
@@ -568,21 +1017,32 @@ def two_phase_hybrid_solve(instance: Dict, timeout: float = 300.0,
     n = len(instance['ports'])
     initial_capital = instance['initial_capital']
     
-    # For small instances, evaluate more routes
+    # CRITICAL IMPROVEMENT: Adaptive parameters based on instance size
+    # For large instances (n >= 15), eliminate route cycling and reduce route evaluation
     if n <= 8:
         # Increase beam width significantly for small instances
         adaptive_beam_width = max(beam_width, n * 30)
         # Less aggressive pruning - evaluate routes even if bound is slightly lower
         bound_tolerance = 20.0
         max_routes_to_evaluate = min(100, 2 ** (n - 1))  # More routes for small n
-    else:
+    elif n >= 15:
+        # For large instances: single-pass only, no cycling, fewer routes
         adaptive_beam_width = beam_width
         bound_tolerance = 0.0
-        max_routes_to_evaluate = 200
+        max_routes_to_evaluate = min(50, beam_width * 2)  # Much fewer routes for large n
+    else:
+        # Medium instances: moderate evaluation
+        adaptive_beam_width = beam_width
+        bound_tolerance = 0.0
+        max_routes_to_evaluate = 100
     
     # Iterative route generation with DP feedback
     # Round 1: Initial route generation
-    route_timeout = timeout * 0.3  # Use 30% of timeout for initial route generation
+    # CRITICAL IMPROVEMENT: For large n, use more time for initial route generation (single-pass)
+    if n >= 15:
+        route_timeout = timeout * 0.5  # Use 50% of timeout for large instances (single-pass only)
+    else:
+        route_timeout = timeout * 0.3  # Use 30% of timeout for initial route generation
     routes = generate_promising_routes(instance, beam_width=adaptive_beam_width, 
                                       timeout=route_timeout, adaptive_beam=True)
     stats['routes_generated'] = len(routes)
@@ -624,8 +1084,9 @@ def two_phase_hybrid_solve(instance: Dict, timeout: float = 300.0,
                 best_solution['decisions'] = decisions
     
     # Round 2: Generate additional routes based on successful patterns
+    # CRITICAL IMPROVEMENT: Skip Round 2 for large instances (n >= 15) to eliminate cycling
     # If we have good solutions, try variations of successful routes
-    if route_scores and time.time() - start_time < timeout * 0.8:
+    if n < 15 and route_scores and time.time() - start_time < timeout * 0.8:
         # Sort routes by capital (descending)
         route_scores.sort(key=lambda x: x[1], reverse=True)
         
@@ -766,10 +1227,11 @@ def two_phase_hybrid_solve(instance: Dict, timeout: float = 300.0,
     
     # Safety check: If no valid solution found (all routes resulted in capital < initial),
     # generate more routes using a different strategy
+    # CRITICAL IMPROVEMENT: Skip safety check for large instances (n >= 15) to avoid cycling
     final_capital = best_solution['capital'] if best_solution['capital'] != float('-inf') else None
     no_valid_solution = (final_capital is None or final_capital < instance['initial_capital'])
     
-    if no_valid_solution and time.time() - start_time < timeout * 0.95:
+    if n < 15 and no_valid_solution and time.time() - start_time < timeout * 0.95:
         # Generate additional routes using exhaustive or relaxed strategy
         # This safety mechanism ensures we explore more possibilities when
         # all previously evaluated routes resulted in invalid solutions
