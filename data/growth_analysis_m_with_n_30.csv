@@ -1,0 +1,4 @@
+n,m,k,execution_time,routes_generated,routes_evaluated,final_capital,timeout
+30,8,5,173.69927191734314,10915,5000,,False
+30,14,5,170.91653752326965,5430,285,641.8000000000001,False
+30,15,5,600.1112484931946,8830,2170,,True
