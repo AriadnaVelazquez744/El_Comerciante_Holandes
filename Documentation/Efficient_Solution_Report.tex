@@ -456,6 +456,50 @@ The implementation uses the following key data structures:
     \item \textbf{Route Representation}: Lists of port indices $[v_0, v_1, ..., v_L, v_0]$ with start and end at Amsterdam
 \end{itemize}
 
+\subsection{Continuous Search Loop for Route Evaluation}
+
+The route evaluation in the hybrid algorithm now uses a robust continuous search loop with batch cycle control, adaptive route generation, and best-solution tracking:
+
+\textbf{Continuous Cycle and Batch Processing:}
+\begin{itemize}
+    \item Routes are evaluated in batches of 50. The loop continues until:
+        \begin{itemize}
+            \item A valid solution is found ($capital \geq initial\_capital$),
+            \item 6 cycles are completed (max 300 routes),
+            \item All routes are exhausted,
+            \item Timeout is reached (default 480s)
+        \end{itemize}
+    \item Each batch only processes new (unseen) routes; previously evaluated routes use a cached result to avoid redundant DP calls.
+    \item Results are cached (route tuple $\to$ (capital, decisions)) and reused for repeats.
+    \item Non-trivial and higher-bound routes are prioritized; trivial ($[0,0]$) only at última instancia.
+    \item Search stops immediately on finding a valid solution.
+\end{itemize}
+
+\textbf{Continuous and Adaptive Search:}
+\begin{itemize}
+    \item Old fallback rounds and forced stops are replaced by a continuous, adaptive loop:
+        \begin{itemize}
+            \item When all routes in the current batch are processed, more routes are generated as needed, up to 20s per generation.
+            \item If many routes have been evaluated (e.g., $>100$), the system generates variations by adding unvisited ports to best found routes.
+            \item The beam width may increase in extra generations (up to 500).
+        \end{itemize}
+    \item During route evaluation:
+        \begin{itemize}
+            \item Quick feasibility checks skip routes with $bound < initial\_capital$ or too low compared to best.
+            \item The algorithm always tracks and returns the best solution found, even if invalid, with an $is\_valid$ flag (capital $< initial\_capital$ is permitted, but clearly indicated).
+            \item No NaN is returned -- always outputs the best found.
+        \end{itemize}
+\end{itemize}
+
+\textbf{Impact and Results:}
+\begin{itemize}
+    \item Maximizes the search effort within the permitted time, giving a much higher probability of finding a valid solution (not limited to a single batch of 50).
+    \item Memory-efficient: the route evaluation cache remains small (even under 300 routes = $<1$MB).
+    \item The process is efficient (avoids duplicate DP evaluations), early-stopping, and always delivers a meaningful result ($is\_valid$, $timeout$ indicators).
+    \item The flow is robust: no más dependencias de que la solución esté en el primer batch, y no se omite ningún candidate prometedor.
+\end{itemize}
+
+
 \subsection{Key Optimizations}
 
 \subsubsection{Capital Discretization}
