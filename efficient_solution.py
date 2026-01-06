@@ -144,7 +144,7 @@ def calculate_pctsp_bound(route: List[int], instance: Dict) -> float:
     return total_prize - total_cost
 
 
-def generate_promising_routes(instance: Dict, beam_width: int = 100, 
+def generate_promising_routes(instance: Dict, beam_width: int = 200, 
                              max_depth: Optional[int] = None, timeout: float = 300.0,
                              adaptive_beam: bool = True) -> List[Tuple[List[int], float]]:
     """
@@ -967,7 +967,7 @@ def solve_transactions_dp(route: List[int], instance: Dict) -> Tuple[Optional[fl
     return best_final_capital, decisions
 
 
-def two_phase_hybrid_solve(instance: Dict, timeout: float = 300.0, 
+def two_phase_hybrid_solve(instance: Dict, timeout: float = 500.0, 
                            beam_width: int = 100) -> Dict:
     """
     Main two-phase hybrid algorithm.
@@ -1051,37 +1051,101 @@ def two_phase_hybrid_solve(instance: Dict, timeout: float = 300.0,
     evaluated_routes = {}  # route_tuple -> (capital, decisions)
     route_scores = []  # List of (route, capital) for sorting
     
-    # Phase 2: Solve transaction DP for each route (initial round)
-    routes_evaluated_count = 0
+    # CONTINUOUS CYCLE: Process routes in batches of 50 until valid solution found
+    # This ensures we systematically evaluate routes while reusing memorized (cached) results
+    # Continues up to 6 cycles (300 routes max) or until valid solution found or routes exhausted
+    
+    # Separate trivial and non-trivial routes, prioritize non-trivial
+    non_trivial_routes = []
+    trivial_routes = []
+    
     for route, bound in routes:
-        if time.time() - start_time > timeout:
-            stats['timeout'] = True
+        if len(route) <= 2 and route[0] == 0 and route[-1] == 0:
+            trivial_routes.append((route, bound))
+        else:
+            non_trivial_routes.append((route, bound))
+    
+    # Sort non-trivial routes by bound (descending) to prioritize promising ones
+    non_trivial_routes.sort(key=lambda x: x[1], reverse=True)
+    
+    # Combine: non-trivial first, then trivial as fallback
+    all_routes = non_trivial_routes + trivial_routes
+    
+    routes_evaluated_count = 0
+    batch_size = 50
+    max_cycles = 50
+    cycle_count = 0
+    
+    # CONTINUOUS CYCLE: Process in batches until valid solution found
+    while (cycle_count < max_cycles and 
+           time.time() - start_time < timeout):
+        
+        # Check if we already have a valid solution
+        if (best_solution['capital'] != float('-inf') and 
+            best_solution['capital'] >= initial_capital):
+            break  # Valid solution found, exit cycle
+        
+        # Get next batch of unevaluated routes
+        remaining_routes = [(r, b) for r, b in all_routes 
+                           if tuple(r) not in evaluated_routes]
+        
+        if not remaining_routes:
+            break  # No more routes to evaluate
+        
+        # Sort remaining routes by bound (descending) to prioritize promising ones
+        remaining_routes.sort(key=lambda x: x[1], reverse=True)
+        
+        # Process next batch (up to batch_size routes)
+        batch_routes = remaining_routes[:batch_size]
+        routes_in_batch = 0
+        
+        for route, bound in batch_routes:
+            if time.time() - start_time > timeout:
+                stats['timeout'] = True
+                break
+            
+            # Quick feasibility check: skip routes that can't maintain initial capital
+            if bound < initial_capital:
+                continue  # Skip obviously infeasible routes
+            
+            # Adaptive pruning: skip if bound is too low compared to current best
+            if best_solution['capital'] != float('-inf'):
+                if bound < best_solution['capital'] - bound_tolerance:
+                    continue
+            
+            route_tuple = tuple(route)
+            
+            # Check if already evaluated (from cache/memory) - reuse cached result
+            if route_tuple in evaluated_routes:
+                # Reuse memorized result from previous cycle
+                max_capital, decisions = evaluated_routes[route_tuple]
+            else:
+                # Evaluate with DP and store in cache for future reuse
+                routes_evaluated_count += 1
+                routes_in_batch += 1
+                stats['routes_evaluated'] += 1
+                max_capital, decisions = solve_transactions_dp(route, instance)
+                
+                # Store in cache/memory for reuse in future cycles
+                evaluated_routes[route_tuple] = (max_capital, decisions)
+            
+            # Update best solution if better
+            if max_capital is not None:
+                route_scores.append((route, max_capital))
+                if max_capital > best_solution['capital']:
+                    best_solution['capital'] = max_capital
+                    best_solution['route'] = route
+                    best_solution['decisions'] = decisions
+                
+                # If valid solution found, exit cycle early
+                if max_capital >= initial_capital:
+                    break
+        
+        cycle_count += 1
+        
+        # If no routes were evaluated in this batch (all skipped or already cached), break
+        if routes_in_batch == 0:
             break
-        
-        # Adaptive pruning: for small instances, be less aggressive
-        # Compare bound (which now includes initial capital) to current best
-        # Only prune if we have a valid solution and bound is significantly worse
-        if best_solution['capital'] != float('-inf'):
-            if bound < best_solution['capital'] - bound_tolerance:
-                continue
-        
-        # Limit number of routes evaluated for very large instances
-        if routes_evaluated_count >= max_routes_to_evaluate:
-            break
-        
-        routes_evaluated_count += 1
-        stats['routes_evaluated'] += 1
-        max_capital, decisions = solve_transactions_dp(route, instance)
-        
-        route_tuple = tuple(route)
-        evaluated_routes[route_tuple] = (max_capital, decisions)
-        
-        if max_capital is not None:
-            route_scores.append((route, max_capital))
-            if max_capital > best_solution['capital']:
-                best_solution['capital'] = max_capital
-                best_solution['route'] = route
-                best_solution['decisions'] = decisions
     
     # Round 2: Generate additional routes based on successful patterns
     # CRITICAL IMPROVEMENT: Skip Round 2 for large instances (n >= 15) to eliminate cycling
